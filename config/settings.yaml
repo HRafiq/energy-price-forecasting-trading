@@ -180,10 +180,28 @@ baselines:
   min_error_days: 14
 
 battery:
+  # The handoff default: a two-hour battery, 1 MW for 2 MWh.
   power_mw: 1.0
   capacity_mwh: 2.0
+  # Split evenly between charging and discharging: sqrt(0.90) each way.
   round_trip_efficiency: 0.90
+  # Wear priced per MWh discharged; stops cycling on spreads too thin to pay for it.
   degradation_eur_per_mwh: 8.0
+  # Every delivery day starts and ends at this share of capacity, so days are
+  # independent and comparable. Half full lets the battery sell a morning peak
+  # before it has bought anything.
+  initial_soc_fraction: 0.5
+  # Warranty-style cap on equivalent full cycles per day. Without it perfect
+  # foresight cycled almost three times on volatile days, a pace battery
+  # warranties rarely allow. null leaves wear cost as the only limit.
+  max_cycles_per_day: 2.0
+
+trading:
+  # Quantile-aware dispatch levels, the dashboard's dial next to the median:
+  # selling is valued at q_level and buying at q_(1 - level).
+  dispatch_quantiles: [0.25, 0.10]
+  # CBC solves a real day in well under a second; this only guards a stuck solve.
+  solver_time_limit_s: 60
 
 health:
   # Rolling 90% interval coverage below this raises a drift alert (M2).

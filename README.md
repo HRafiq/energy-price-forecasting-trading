@@ -1,10 +1,10 @@
 # energy-price-forecasting-trading
 
-Probabilistic electricity price forecasting (DE-LU day-ahead, 15-minute products) and battery arbitrage trading. Six forecasting models compared, with LightGBM and conformal ranges in production; MILP dispatch, walk-forward backtesting and a React dashboard with model-health monitoring to come.
+Probabilistic electricity price forecasting (DE-LU day-ahead, 15-minute products) and battery arbitrage trading. Six forecasting models compared, with LightGBM and conformal ranges in production; MILP battery dispatch with perfect-foresight, median and quantile-aware strategies; walk-forward backtesting and a React dashboard with model-health monitoring to come.
 
 ## Status
 
-**Phase 2 of 9: features and model comparison.** Phase 0, the 15-minute dataset, and Phase 1, baselines and leak-free walk-forward evaluation, are complete. The project is built in reviewed phases.
+**Phase 3 of 9: battery dispatch and trading strategies.** Phase 0, the 15-minute dataset, Phase 1, baselines and leak-free walk-forward evaluation, and Phase 2, features and the model comparison, are complete. The project is built in reviewed phases.
 
 ## Quickstart
 
@@ -21,6 +21,7 @@ uv run python -m src.ingest.build_inputs      # model-input dataset
 uv run python -m src.forecasting.run_comparison  # six models, tracked in mlflow.db
 uv run python notebooks/build_model_comparison.py  # evaluation notebook
 uv run python -m src.forecasting.production --day 2026-05-31  # one production forecast
+uv run python -m src.trading.run_strategies   # battery strategies over the validation window
 uv run pytest
 ```
 
@@ -42,7 +43,9 @@ config/settings.yaml   zone, resolution, SMARD series, hold-out, battery, quanti
 src/config.py          validated settings loader
 src/timegrid.py        UTC and local delivery-day grid (DST-safe)
 src/ingest/            SMARD client, dataset builder, data-quality checks
-src/...                forecasting, trading, health, export, narration (later phases)
+src/forecasting/       information set, walk-forward harness, models, production forecaster
+src/trading/           battery model, MILP dispatch, settlement, strategies
+src/...                health, export, narration (later phases)
 notebooks/             exploration scripts; logic lives in src/
 tests/                 network-free tests, including DST and granularity checks
 docs/                  decisions, production notes, learning notes, figures, mockup
@@ -54,5 +57,6 @@ docs/                  decisions, production notes, learning notes, figures, moc
 - [notebooks/model_comparison.ipynb](notebooks/model_comparison.ipynb): six forecasting models compared, and why LightGBM with conformal ranges was chosen
 - [docs/results/phase1_baselines.md](docs/results/phase1_baselines.md): baseline forecast results, the numbers to beat
 - [docs/results/m3_leakage.md](docs/results/m3_leakage.md): how much post-gate data would flatter a backtest
+- [docs/results/phase3_strategies.md](docs/results/phase3_strategies.md): battery strategies over the validation window, against the perfect-foresight ceiling
 - [docs/production_notes.md](docs/production_notes.md): the failure catalogue with measured results
 - [docs/mockup/](docs/mockup/): the approved dashboard design
