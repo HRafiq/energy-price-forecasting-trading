@@ -6,6 +6,8 @@ market:
   bidding_zone: DE-LU
   timezone: Europe/Berlin
   gate_closure_local: "12:00"
+  # The daily forecast for local day D+1 is issued at this time on day D.
+  forecast_issue_local: "11:40"
   # The DE-LU zone exists from this day. Before it, Germany shared a price
   # with Austria (DE-AT-LU), so earlier prices are a different market.
   zone_start: "2018-10-01"
@@ -47,15 +49,53 @@ smard:
     wind_offshore_forecast_mw: 3791  # day-ahead forecast
     solar_forecast_mw: 125           # day-ahead forecast
 
+availability:
+  # When each column is known at the issue time. Models only ever see this view
+  # (src/forecasting/information.py). See docs/data_guide.md §9.
+  #   before_target_day   periods before local day D+1 starts
+  #   through_target_day  also every period of day D+1
+  #   before_issue_lag    periods ending at least actuals_lag_minutes before
+  #                       the issue time on day D
+  # SMARD's measured values ended about two to three hours before download in
+  # one observed build. Conservative until measured properly.
+  actuals_lag_minutes: 180
+  columns:
+    price_eur_mwh: before_target_day            # day D prices published on D-1
+    load_actual_mw: before_issue_lag
+    load_forecast_mw: through_target_day        # due two hours before the gate
+    wind_onshore_actual_mw: before_issue_lag
+    wind_offshore_actual_mw: before_issue_lag
+    solar_actual_mw: before_issue_lag
+    wind_onshore_forecast_mw: before_target_day  # D+1 forecast arrives 18:00 on D
+    wind_offshore_forecast_mw: before_target_day
+    solar_forecast_mw: before_target_day
+    residual_load_actual_mw: before_issue_lag
+    residual_load_forecast_mw: before_target_day
+    price_product_minutes: through_target_day   # fixed by the calendar
+
 evaluation:
   # Final untouched test period (T6). No tuning, no EDA, no model selection
   # reads data from this local day onward until final reporting in Phase 4.
   # Confirmed 2026-09-13: training keeps eight months of genuine 15-minute
   # prices, including April and May. See docs/decisions.md.
   holdout_start: "2026-06-01"
+  # First day forecast in walk-forward runs; leaves the history baselines need.
+  first_target_day: "2019-01-01"
+  # Model comparison window for Phase 2: two years ending at the hold-out,
+  # covering post-crisis hourly products and all 15-minute training months.
+  validation_start: "2024-06-01"
+  # A day with any price above this counts as a spike day in evaluation.
+  spike_threshold_eur_mwh: 200
 
 forecasting:
   quantiles: [0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95]
+
+baselines:
+  # Past days whose errors set each baseline's quantiles, per local hour.
+  error_window_days: 28
+  # Refuse to forecast when fewer past days than this produced errors: the
+  # ranges would look precise while resting on too little history.
+  min_error_days: 14
 
 battery:
   power_mw: 1.0
