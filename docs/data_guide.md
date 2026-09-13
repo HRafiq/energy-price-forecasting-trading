@@ -70,9 +70,6 @@ minutes, a refresh about ten seconds.
 15-minute products. Energy-Charts republishes SMARD data, so this confirms our
 download and time alignment, not SMARD itself.
 
-Why SMARD instead of OPSD or ENTSO-E is recorded in
-[decisions.md](decisions.md).
-
 ---
 
 ## 3. The dataset
@@ -480,8 +477,7 @@ rules with tests.
 **Consequence.** The dataset's renewable forecast columns, and the forecast
 residual load built from them, describe day D+1 with information that arrives
 six hours after the gate. They stay in the dataset for analysis and for the
-leakage experiment M3, but no reported model may use them for day D+1. The
-options are recorded in [decisions.md](decisions.md).
+leakage experiment M3, but no reported model may use them for day D+1.
 
 ---
 

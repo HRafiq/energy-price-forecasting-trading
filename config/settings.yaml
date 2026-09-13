@@ -19,7 +19,7 @@ data:
   # Quarter-hourly, the granularity the day-ahead market trades today. Before
   # market.quarter_hour_products_from the market traded hourly products, so
   # those quarter-hours repeat their hour's price and price_product_minutes is
-  # 60. See docs/decisions.md.
+  # 60.
   modeling_resolution: quarterhour
   # A local calendar day in market.timezone.
   start: "2018-10-01"
@@ -157,7 +157,7 @@ evaluation:
   # Final untouched test period (T6). No tuning, no EDA, no model selection
   # reads data from this local day onward until final reporting in Phase 4.
   # Confirmed 2026-09-13: training keeps eight months of genuine 15-minute
-  # prices, including April and May. See docs/decisions.md.
+  # prices, including April and May.
   holdout_start: "2026-06-01"
   # First day forecast in walk-forward runs; leaves the history baselines need.
   first_target_day: "2019-01-01"
@@ -169,8 +169,7 @@ evaluation:
 
 forecasting:
   quantiles: [0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95]
-  # Chosen in Phase 2 from six candidates; see notebooks/model_comparison.ipynb
-  # and docs/decisions.md.
+  # Chosen in Phase 2 from six candidates; see notebooks/model_comparison.ipynb.
   production_model: lightgbm_conformal
 
 baselines:

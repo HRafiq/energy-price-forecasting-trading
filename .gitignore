@@ -224,3 +224,8 @@ data/processed/
 mlruns/
 mlflow.db
 .DS_Store
+# Local-only notes, kept out of the public repository.
+docs/Price_Forecasting_Trading_Concepts_Primer.md
+docs/Price_Forecasting_Trading_Project_Handoff_v2.md
+docs/decisions.md
+docs/learning_notes.md
