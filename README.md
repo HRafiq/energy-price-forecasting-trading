@@ -4,7 +4,7 @@ Probabilistic electricity price forecasting (DE-LU day-ahead, 15-minute products
 
 ## Status
 
-**Phase 2 of 9: features and model comparison.** Phase 0, the 15-minute dataset, and Phase 1, baselines and leak-free walk-forward evaluation, are complete. The project is built in reviewed phases. The plan is in [the handoff doc](docs/Price_Forecasting_Trading_Project_Handoff_v2.md) and the background in [the concepts primer](docs/Price_Forecasting_Trading_Concepts_Primer.md).
+**Phase 2 of 9: features and model comparison.** Phase 0, the 15-minute dataset, and Phase 1, baselines and leak-free walk-forward evaluation, are complete. The project is built in reviewed phases.
 
 ## Quickstart
 
@@ -33,7 +33,7 @@ uv run pytest
 | Yahoo Finance, ticker TTF=F | Daily Dutch TTF gas futures settlement | Yahoo terms, personal use; not redistributed |
 | [EEX](https://www.eex.com) EU ETS primary auctions | Daily EU carbon allowance auction price | EEX public reports; not redistributed |
 
-Data: Bundesnetzagentur | SMARD.de, and weather data by Open-Meteo.com, both licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Downloaded data is not committed; the ingest command rebuilds it. Why SMARD rather than OPSD or ENTSO-E is recorded in [docs/decisions.md](docs/decisions.md).
+Data: Bundesnetzagentur | SMARD.de, and weather data by Open-Meteo.com, both licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Downloaded data is not committed; the ingest command rebuilds it.
 
 ## Layout
 
@@ -54,7 +54,5 @@ docs/                  decisions, production notes, learning notes, figures, moc
 - [notebooks/model_comparison.ipynb](notebooks/model_comparison.ipynb): six forecasting models compared, and why LightGBM with conformal ranges was chosen
 - [docs/results/phase1_baselines.md](docs/results/phase1_baselines.md): baseline forecast results, the numbers to beat
 - [docs/results/m3_leakage.md](docs/results/m3_leakage.md): how much post-gate data would flatter a backtest
-- [docs/decisions.md](docs/decisions.md): dated decisions and the alternatives considered
 - [docs/production_notes.md](docs/production_notes.md): the failure catalogue with measured results
-- [docs/learning_notes.md](docs/learning_notes.md): concept explanations, phase by phase
 - [docs/mockup/](docs/mockup/): the approved dashboard design

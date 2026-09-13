@@ -3,7 +3,7 @@
     uv run python -m src.forecasting.production --day 2026-05-31
 
 ``forecasting.production_model`` names the model; the choice and its evidence are
-in notebooks/model_comparison.ipynb and docs/decisions.md. For a target day the
+in notebooks/model_comparison.ipynb. For a target day the
 model trains on the information set as of 11:40 the day before and forecasts
 every quarter-hour of that day. The command writes the forecast to
 ``data/processed/forecasts/production/<day>.parquet``.
