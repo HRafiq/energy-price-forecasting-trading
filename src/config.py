@@ -17,6 +17,8 @@ import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from src.trading.battery import Battery
+
 __all__ = [
     "CARBON_COLUMN",
     "CONFIG_DIR",
@@ -31,7 +33,6 @@ __all__ = [
     "AvailabilityConfig",
     "AvailabilityRule",
     "BaselinesConfig",
-    "BatteryConfig",
     "DataConfig",
     "EvaluationConfig",
     "ForecastingConfig",
@@ -42,6 +43,7 @@ __all__ = [
     "Resolution",
     "Settings",
     "SmardConfig",
+    "TradingConfig",
     "WeatherConfig",
     "load_settings",
 ]
@@ -256,11 +258,21 @@ class BaselinesConfig(_Frozen):
         return self
 
 
-class BatteryConfig(_Frozen):
-    power_mw: float = Field(gt=0)
-    capacity_mwh: float = Field(gt=0)
-    round_trip_efficiency: float = Field(gt=0, le=1)
-    degradation_eur_per_mwh: float = Field(ge=0)
+class TradingConfig(_Frozen):
+    """Strategy levels and solver limits for battery dispatch."""
+
+    #: Quantile-aware levels: selling valued at q_level, buying at q_(1 - level).
+    dispatch_quantiles: tuple[float, ...] = Field(min_length=1)
+    solver_time_limit_s: float = Field(gt=0)
+
+    @field_validator("dispatch_quantiles")
+    @classmethod
+    def _pessimistic_levels(cls, value: tuple[float, ...]) -> tuple[float, ...]:
+        if any(not 0 < level < 0.5 for level in value):
+            raise ValueError("dispatch_quantiles must lie strictly between 0 and 0.5")
+        if len(set(value)) != len(value):
+            raise ValueError("dispatch_quantiles must be unique")
+        return value
 
 
 class HealthConfig(_Frozen):
@@ -279,7 +291,8 @@ class Settings(_Frozen):
     evaluation: EvaluationConfig
     forecasting: ForecastingConfig
     baselines: BaselinesConfig
-    battery: BatteryConfig
+    battery: Battery
+    trading: TradingConfig
     health: HealthConfig
 
     @model_validator(mode="after")
@@ -330,6 +343,13 @@ class Settings(_Frozen):
                 f"missing {sorted(expected - declared)}, "
                 f"unknown {sorted(declared - expected)}"
             )
+        forecast_levels = {round(q, 6) for q in self.forecasting.quantiles}
+        for level in self.trading.dispatch_quantiles:
+            if not {round(level, 6), round(1 - level, 6)} <= forecast_levels:
+                raise ValueError(
+                    f"dispatch quantile {level} needs forecast quantiles {level} and "
+                    f"{round(1 - level, 6)} in forecasting.quantiles"
+                )
         return self
 
 
