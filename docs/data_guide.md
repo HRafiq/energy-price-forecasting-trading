@@ -85,8 +85,8 @@ Why SMARD instead of OPSD or ENTSO-E is recorded in
 | Index | `timestamp_utc`: start of the period, timezone-aware UTC |
 | Columns | 12: nine downloaded, two derived, one product flag |
 | Coverage, build of 13 Sep 2026 | 30 Sep 2018 22:00 UTC to 14 Sep 2026 21:45 UTC, 278,976 quarter-hours |
-| Tuning period | 262,944 quarter-hours, of which 17,472 carry 15-minute products |
-| Hold-out so far | 16,032 quarter-hours |
+| Tuning period | 268,800 quarter-hours, of which 23,328 carry 15-minute products |
+| Hold-out so far | 10,176 quarter-hours |
 
 **Time conventions**
 
@@ -248,13 +248,14 @@ forecasts would be a strong leak (§9).
 
 | Period | Local dates | Use |
 |---|---|---|
-| Tuning | 1 Oct 2018 to 31 Mar 2026 | Exploration, feature and model design, walk-forward validation |
-| Hold-out | From 1 Apr 2026 | Final test in Phase 4 only. Not explored, not tuned on |
+| Tuning | 1 Oct 2018 to 31 May 2026 | Exploration, feature and model design, walk-forward validation |
+| Hold-out | From 1 Jun 2026 | Final test in Phase 4 only. Not explored, not tuned on |
 
-The hold-out start is a proposal awaiting review. It leaves six months of genuine
-quarter-hour prices, October 2025 to March 2026, for training and tuning. The
-hold-out covers spring and summer only, so winter evening spikes are not tested
-until it grows. The Phase 0 figures describe the hourly-product era and do not
+The hold-out start was confirmed on 13 September 2026. Training keeps eight
+months of genuine quarter-hour prices, October 2025 to May 2026, including the
+negative-price months of April and May. The hold-out covers June to
+mid-September 2026, summer only, so winter evening spikes are not tested until
+it grows. The Phase 0 figures describe the hourly-product era and do not
 yet cover the 15-minute months.
 
 **Regime labels** used in the figures are descriptive, with approximate
@@ -504,4 +505,5 @@ panel reads each one.
 | Date | Phase | Change |
 |---|---|---|
 | 2026-09-13 | 0 | First version: decision timeline, source, dataset, columns, quality, five figures, gate availability |
-| 2026-09-13 | 0 | Dataset switched to 15-minute periods, volumes in MW, product flag added, hold-out proposal moved to 1 Apr 2026 |
+| 2026-09-13 | 0 | Dataset switched to 15-minute periods, volumes in MW, product flag added |
+| 2026-09-13 | 0 | Hold-out start confirmed as 1 Jun 2026 |
