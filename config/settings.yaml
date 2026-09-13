@@ -26,6 +26,8 @@ data:
   raw_dir: data/raw
   processed_dir: data/processed
   dataset_file: smard_quarterhour.parquet
+  # SMARD dataset joined with weather forecasts and fuel prices; models read this.
+  inputs_file: model_inputs_quarterhour.parquet
 
 smard:
   base_url: https://www.smard.de/app/chart_data
@@ -48,6 +50,43 @@ smard:
     wind_onshore_forecast_mw: 123    # day-ahead forecast
     wind_offshore_forecast_mw: 3791  # day-ahead forecast
     solar_forecast_mw: 125           # day-ahead forecast
+
+weather:
+  # Open-Meteo Previous Runs API: archived weather-model forecasts at fixed lead
+  # times. Data licence CC BY 4.0; free API for non-commercial use.
+  base_url: https://previous-runs-api.open-meteo.com/v1/forecast
+  # Use the forecast issued this many days before each valid time. Two days is
+  # the shortest lead that is published before 11:40 on day D for every period
+  # of day D+1.
+  lead_days: 2
+  # First day with complete archived forecasts for every variable.
+  start: "2024-03-01"
+  timeout_s: 60
+  request_days: 31
+  variables: [wind_speed_100m, shortwave_radiation, temperature_2m]
+  # Name -> [latitude, longitude]: wind regions, offshore clusters, solar south.
+  points:
+    north_sea_offshore: [54.4, 6.8]
+    baltic_offshore: [54.7, 13.8]
+    schleswig_holstein: [54.3, 9.5]
+    lower_saxony_coast: [53.3, 7.8]
+    lower_saxony_inland: [52.8, 9.5]
+    mecklenburg: [53.8, 12.5]
+    brandenburg: [52.3, 13.5]
+    saxony_anhalt: [51.9, 11.7]
+    north_rhine_westphalia: [51.6, 7.5]
+    hesse_thuringia: [50.9, 10.0]
+    baden_wuerttemberg: [48.6, 9.0]
+    bavaria: [48.8, 11.8]
+
+fuels:
+  # Daily settlement of front-month Dutch TTF gas futures, via Yahoo Finance.
+  ttf_ticker: TTF=F
+  # EEX EU ETS primary auction results: price in EUR per tonne CO2.
+  eua_archive_url: https://www.eex.com/fileadmin/EEX/Downloads/Markets/Environmentals/EUA_Emission_Spot_Primary_Market_Auction_Report/Archive_Reports/emission-spot-primary-market-auction-report-2012-2025-data.zip
+  eua_archive_last_year: 2025
+  eua_year_url: https://public.eex-group.com/eex/eua-auction-report/emission-spot-primary-market-auction-report-{year}-data.xlsx
+  timeout_s: 120
 
 availability:
   # When each column is known at the issue time. Models only ever see this view
@@ -72,6 +111,47 @@ availability:
     residual_load_actual_mw: before_issue_lag
     residual_load_forecast_mw: before_target_day
     price_product_minutes: through_target_day   # fixed by the calendar
+    # Fuel rows for local day x carry the last price published before day x.
+    gas_ttf_eur_mwh: before_target_day
+    carbon_eua_eur_t: before_target_day
+    # Weather forecasts issued two days before each valid time, so every period
+    # of day D+1 was forecast by 23:45 on day D-1.
+    wx_north_sea_offshore_wind_speed_100m: through_target_day
+    wx_north_sea_offshore_shortwave_radiation: through_target_day
+    wx_north_sea_offshore_temperature_2m: through_target_day
+    wx_baltic_offshore_wind_speed_100m: through_target_day
+    wx_baltic_offshore_shortwave_radiation: through_target_day
+    wx_baltic_offshore_temperature_2m: through_target_day
+    wx_schleswig_holstein_wind_speed_100m: through_target_day
+    wx_schleswig_holstein_shortwave_radiation: through_target_day
+    wx_schleswig_holstein_temperature_2m: through_target_day
+    wx_lower_saxony_coast_wind_speed_100m: through_target_day
+    wx_lower_saxony_coast_shortwave_radiation: through_target_day
+    wx_lower_saxony_coast_temperature_2m: through_target_day
+    wx_lower_saxony_inland_wind_speed_100m: through_target_day
+    wx_lower_saxony_inland_shortwave_radiation: through_target_day
+    wx_lower_saxony_inland_temperature_2m: through_target_day
+    wx_mecklenburg_wind_speed_100m: through_target_day
+    wx_mecklenburg_shortwave_radiation: through_target_day
+    wx_mecklenburg_temperature_2m: through_target_day
+    wx_brandenburg_wind_speed_100m: through_target_day
+    wx_brandenburg_shortwave_radiation: through_target_day
+    wx_brandenburg_temperature_2m: through_target_day
+    wx_saxony_anhalt_wind_speed_100m: through_target_day
+    wx_saxony_anhalt_shortwave_radiation: through_target_day
+    wx_saxony_anhalt_temperature_2m: through_target_day
+    wx_north_rhine_westphalia_wind_speed_100m: through_target_day
+    wx_north_rhine_westphalia_shortwave_radiation: through_target_day
+    wx_north_rhine_westphalia_temperature_2m: through_target_day
+    wx_hesse_thuringia_wind_speed_100m: through_target_day
+    wx_hesse_thuringia_shortwave_radiation: through_target_day
+    wx_hesse_thuringia_temperature_2m: through_target_day
+    wx_baden_wuerttemberg_wind_speed_100m: through_target_day
+    wx_baden_wuerttemberg_shortwave_radiation: through_target_day
+    wx_baden_wuerttemberg_temperature_2m: through_target_day
+    wx_bavaria_wind_speed_100m: through_target_day
+    wx_bavaria_shortwave_radiation: through_target_day
+    wx_bavaria_temperature_2m: through_target_day
 
 evaluation:
   # Final untouched test period (T6). No tuning, no EDA, no model selection
@@ -89,6 +169,9 @@ evaluation:
 
 forecasting:
   quantiles: [0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95]
+  # Chosen in Phase 2 from six candidates; see notebooks/model_comparison.ipynb
+  # and docs/decisions.md.
+  production_model: lightgbm_conformal
 
 baselines:
   # Past days whose errors set each baseline's quantiles, per local hour.

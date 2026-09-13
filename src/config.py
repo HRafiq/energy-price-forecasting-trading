@@ -18,9 +18,12 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 __all__ = [
+    "CARBON_COLUMN",
     "CONFIG_DIR",
     "DEFAULT_SETTINGS_PATH",
     "DERIVED_COLUMNS",
+    "FUEL_COLUMNS",
+    "GAS_COLUMN",
     "PRICE_SERIES",
     "PRODUCT_COLUMN",
     "REPO_ROOT",
@@ -32,11 +35,14 @@ __all__ = [
     "DataConfig",
     "EvaluationConfig",
     "ForecastingConfig",
+    "FuelsConfig",
     "HealthConfig",
     "MarketConfig",
+    "ProductionModel",
     "Resolution",
     "Settings",
     "SmardConfig",
+    "WeatherConfig",
     "load_settings",
 ]
 
@@ -47,6 +53,16 @@ DEFAULT_SETTINGS_PATH = CONFIG_DIR / "settings.yaml"
 Resolution = Literal["hour", "quarterhour"]
 AvailabilityRule = Literal[
     "before_target_day", "through_target_day", "before_issue_lag"
+]
+#: Models that can run on their own as the production forecaster.
+ProductionModel = Literal[
+    "lightgbm_conformal",
+    "lightgbm_quantile",
+    "quantile_forest",
+    "lear",
+    "mstl",
+    "naive_previous_day",
+    "seasonal_naive_previous_week",
 ]
 
 RESOLUTION_STEP: dict[str, pd.Timedelta] = {
@@ -62,6 +78,9 @@ DERIVED_COLUMNS = (
     "residual_load_forecast_mw",
     PRODUCT_COLUMN,
 )
+GAS_COLUMN = "gas_ttf_eur_mwh"
+CARBON_COLUMN = "carbon_eua_eur_t"
+FUEL_COLUMNS = (GAS_COLUMN, CARBON_COLUMN)
 
 _CLOCK_PATTERN = r"^([01]\d|2[0-3]):[0-5]\d$"
 
@@ -116,6 +135,7 @@ class DataConfig(_Frozen):
     raw_dir: Path
     processed_dir: Path
     dataset_file: str = Field(pattern=r"^[\w.-]+\.parquet$")
+    inputs_file: str = Field(pattern=r"^[\w.-]+\.parquet$")
 
     @property
     def raw_path(self) -> Path:
@@ -128,6 +148,10 @@ class DataConfig(_Frozen):
     @property
     def dataset_path(self) -> Path:
         return self.processed_path / self.dataset_file
+
+    @property
+    def inputs_path(self) -> Path:
+        return self.processed_path / self.inputs_file
 
 
 class SmardConfig(_Frozen):
@@ -150,6 +174,44 @@ class SmardConfig(_Frozen):
         return value
 
 
+class WeatherConfig(_Frozen):
+    base_url: str = Field(pattern=r"^https://")
+    #: Forecast issued this many days before each valid time.
+    lead_days: int = Field(ge=2, le=7)
+    start: date
+    timeout_s: float = Field(gt=0)
+    request_days: int = Field(ge=1, le=92)
+    variables: tuple[str, ...] = Field(min_length=1)
+    points: dict[str, tuple[float, float]] = Field(min_length=1)
+
+    @field_validator("points")
+    @classmethod
+    def _points_ok(
+        cls, value: dict[str, tuple[float, float]]
+    ) -> dict[str, tuple[float, float]]:
+        for name, (lat, lon) in value.items():
+            if not name.isidentifier() or not name.islower():
+                raise ValueError(f"point name {name!r} must be lower_snake_case")
+            if not (47.0 <= lat <= 56.0 and 5.0 <= lon <= 16.0):
+                raise ValueError(f"point {name!r} at {lat}, {lon} is outside Germany")
+        return value
+
+    def column(self, point: str, variable: str) -> str:
+        return f"wx_{point}_{variable}"
+
+    @property
+    def columns(self) -> list[str]:
+        return [self.column(p, v) for p in self.points for v in self.variables]
+
+
+class FuelsConfig(_Frozen):
+    ttf_ticker: str
+    eua_archive_url: str = Field(pattern=r"^https://")
+    eua_archive_last_year: int = Field(ge=2018)
+    eua_year_url: str = Field(pattern=r"^https://.*\{year\}")
+    timeout_s: float = Field(gt=0)
+
+
 class AvailabilityConfig(_Frozen):
     actuals_lag_minutes: int = Field(ge=0)
     columns: dict[str, AvailabilityRule]
@@ -164,6 +226,7 @@ class EvaluationConfig(_Frozen):
 
 class ForecastingConfig(_Frozen):
     quantiles: tuple[float, ...]
+    production_model: ProductionModel
 
     @field_validator("quantiles")
     @classmethod
@@ -210,6 +273,8 @@ class Settings(_Frozen):
     market: MarketConfig
     data: DataConfig
     smard: SmardConfig
+    weather: WeatherConfig
+    fuels: FuelsConfig
     availability: AvailabilityConfig
     evaluation: EvaluationConfig
     forecasting: ForecastingConfig
@@ -250,7 +315,14 @@ class Settings(_Frozen):
                 f"first_target_day must be at least {needed.days} days after "
                 "data.start so the baselines have a full error window"
             )
-        expected = set(self.smard.series) | set(DERIVED_COLUMNS)
+        if self.weather.start < self.data.start:
+            raise ValueError("weather.start cannot be before data.start")
+        expected = (
+            set(self.smard.series)
+            | set(DERIVED_COLUMNS)
+            | set(FUEL_COLUMNS)
+            | set(self.weather.columns)
+        )
         declared = set(self.availability.columns)
         if declared != expected:
             raise ValueError(

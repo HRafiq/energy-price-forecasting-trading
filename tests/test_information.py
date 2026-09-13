@@ -35,6 +35,7 @@ class GreedyForecaster:
 
     name = "greedy"
     lookback_days: int | None = None
+    fit_lookback_days: int | None = None
 
     def __init__(self, quantiles: tuple[float, ...]) -> None:
         self.quantiles = quantiles

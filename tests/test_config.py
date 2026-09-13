@@ -124,3 +124,10 @@ def test_settings_that_would_mislead_results_are_rejected(
     raw[section][key] = value
     with pytest.raises(ValidationError, match=match):
         Settings.model_validate(raw)
+
+
+def test_production_model_must_be_a_single_runnable_model() -> None:
+    raw = _raw()
+    raw["forecasting"]["production_model"] = "qra"
+    with pytest.raises(ValidationError, match="production_model"):
+        Settings.model_validate(raw)
