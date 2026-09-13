@@ -42,7 +42,7 @@ the day it forecasts. Scores cover the validation window, 1 June 2024 to 31 May
 | `qra` | Regularized quantile regression on the other models' medians | Nowotarski and Weron 2015; Uniejewski and Weron 2021 |
 | `naive_previous_day`, `seasonal_naive_previous_week` | Baselines to beat | Phase 1 |
 
-**Selection rules** (docs/decisions.md): lowest mean pinball loss on the validation
+**Selection rules**: lowest mean pinball loss on the validation
 window; honest coverage of the 50%, 80% and 90% ranges; performance on the
 15-minute months, negative-price days and spike days; a Diebold-Mariano test so a
 win is not noise; run time that fits the 11:40 deadline; a near tie goes to the

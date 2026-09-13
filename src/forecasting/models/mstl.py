@@ -3,7 +3,7 @@
 MSTL splits the last ``history_days`` of prices into daily and weekly seasonal
 parts and a trend, repeats the seasonal parts and forecasts the trend with
 AutoETS. It uses prices only: the exogenous-variable path reaches only the trend
-model, as checked in docs/decisions.md. Ranges come from the trend model's
+model. Ranges come from the trend model's
 prediction intervals at 50%, 80% and 90%, mapped to the matching quantiles.
 The model refits on every forecast, because it is fast and history-driven.
 """
