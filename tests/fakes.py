@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable, Iterable
+from datetime import date, timedelta
 from typing import Any
 
+import numpy as np
 import pandas as pd
+from numpy.typing import NDArray
 
-from src.config import SmardConfig
+from src.config import PRICE_SERIES, PRODUCT_COLUMN, Settings, SmardConfig
 from src.timegrid import HOUR
 
 
@@ -68,3 +71,39 @@ def hourly_chunks(
     values = [value(i) for i in range(hours)]
     full = pd.Series(values, index=index, dtype="float64")
     return [full.iloc[i : i + chunk_hours] for i in range(0, hours, chunk_hours)]
+
+
+def synthetic_market(
+    settings: Settings,
+    first_day: date,
+    days: int,
+    price: Callable[[pd.DatetimeIndex], NDArray[np.float64]] | None = None,
+) -> pd.DataFrame:
+    """A quarter-hourly dataset with every configured column, local days aligned."""
+    start = settings.market.local_midnight_utc(first_day)
+    end = settings.market.local_midnight_utc(first_day + timedelta(days=days))
+    index = pd.date_range(
+        start, end, freq="15min", inclusive="left", name="timestamp_utc"
+    )
+    base = np.arange(len(index), dtype="float64")
+    frame = pd.DataFrame(
+        {col: base + 1000.0 * k for k, col in enumerate(settings.availability.columns)},
+        index=index,
+    )
+    frame[PRODUCT_COLUMN] = 15
+    if price is not None:
+        frame[PRICE_SERIES] = price(index)
+    return frame
+
+
+def day_clock_price(tz: str) -> Callable[[pd.DatetimeIndex], NDArray[np.float64]]:
+    """Price = 1000 per local day since 2000-01-01 plus the local clock minutes."""
+    epoch = date(2000, 1, 1).toordinal()
+
+    def price(index: pd.DatetimeIndex) -> NDArray[np.float64]:
+        local = index.tz_convert(tz)
+        days = np.asarray([d.toordinal() - epoch for d in local.date], dtype="float64")
+        clock = np.asarray(local.hour * 60 + local.minute, dtype="float64")
+        return np.asarray(1000.0 * days + clock, dtype=np.float64)
+
+    return price

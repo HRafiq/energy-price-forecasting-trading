@@ -4,7 +4,7 @@ Probabilistic electricity price forecasting (DE-LU day-ahead) and battery arbitr
 
 ## Status
 
-**Phase 0 of 9: data and exploratory analysis.** The project is built in reviewed phases. The plan is in [the handoff doc](docs/Price_Forecasting_Trading_Project_Handoff_v2.md) and the background in [the concepts primer](docs/Price_Forecasting_Trading_Concepts_Primer.md).
+**Phase 1 of 9: baselines and walk-forward evaluation.** Phase 0, the 15-minute dataset and data analysis, is complete. The project is built in reviewed phases. The plan is in [the handoff doc](docs/Price_Forecasting_Trading_Project_Handoff_v2.md) and the background in [the concepts primer](docs/Price_Forecasting_Trading_Concepts_Primer.md).
 
 ## Quickstart
 
@@ -14,6 +14,7 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.11.
 uv sync --extra dev --extra eda
 uv run python -m src.ingest.build_dataset     # download SMARD data, write data/processed/
 uv run python notebooks/phase0_eda.py         # figures and tables in docs/figures/phase0/
+uv run python -m src.forecasting.run_baselines # baseline results in docs/results/
 uv run pytest
 ```
 
@@ -41,6 +42,7 @@ docs/                  decisions, production notes, learning notes, figures, moc
 ## Documentation
 
 - [docs/data_guide.md](docs/data_guide.md): the data column by column, what it shows, and how it feeds features, forecasts and trading
+- [docs/results/phase1_baselines.md](docs/results/phase1_baselines.md): baseline forecast results, the numbers to beat
 - [docs/decisions.md](docs/decisions.md): dated decisions and the alternatives considered
 - [docs/production_notes.md](docs/production_notes.md): the failure catalogue with measured results
 - [docs/learning_notes.md](docs/learning_notes.md): concept explanations, phase by phase

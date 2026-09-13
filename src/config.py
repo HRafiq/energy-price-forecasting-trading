@@ -7,7 +7,7 @@ phases later.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from itertools import pairwise
 from pathlib import Path
 from typing import Literal
@@ -20,9 +20,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 __all__ = [
     "CONFIG_DIR",
     "DEFAULT_SETTINGS_PATH",
+    "DERIVED_COLUMNS",
     "PRICE_SERIES",
+    "PRODUCT_COLUMN",
     "REPO_ROOT",
     "RESOLUTION_STEP",
+    "AvailabilityConfig",
+    "AvailabilityRule",
+    "BaselinesConfig",
     "BatteryConfig",
     "DataConfig",
     "EvaluationConfig",
@@ -40,6 +45,9 @@ CONFIG_DIR = REPO_ROOT / "config"
 DEFAULT_SETTINGS_PATH = CONFIG_DIR / "settings.yaml"
 
 Resolution = Literal["hour", "quarterhour"]
+AvailabilityRule = Literal[
+    "before_target_day", "through_target_day", "before_issue_lag"
+]
 
 RESOLUTION_STEP: dict[str, pd.Timedelta] = {
     "hour": pd.Timedelta(hours=1),
@@ -47,10 +55,24 @@ RESOLUTION_STEP: dict[str, pd.Timedelta] = {
 }
 
 PRICE_SERIES = "price_eur_mwh"
+PRODUCT_COLUMN = "price_product_minutes"
+#: Columns the dataset builder adds to the downloaded SMARD series.
+DERIVED_COLUMNS = (
+    "residual_load_actual_mw",
+    "residual_load_forecast_mw",
+    PRODUCT_COLUMN,
+)
+
+_CLOCK_PATTERN = r"^([01]\d|2[0-3]):[0-5]\d$"
 
 
 def _under_repo(path: Path) -> Path:
     return path if path.is_absolute() else REPO_ROOT / path
+
+
+def _clock_minutes(clock: str) -> int:
+    hours, minutes = clock.split(":")
+    return int(hours) * 60 + int(minutes)
 
 
 class _Frozen(BaseModel):
@@ -60,7 +82,8 @@ class _Frozen(BaseModel):
 class MarketConfig(_Frozen):
     bidding_zone: str
     timezone: str
-    gate_closure_local: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    gate_closure_local: str = Field(pattern=_CLOCK_PATTERN)
+    forecast_issue_local: str = Field(pattern=_CLOCK_PATTERN)
     zone_start: date
     quarter_hour_products_from: date
 
@@ -72,6 +95,14 @@ class MarketConfig(_Frozen):
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError(f"unknown timezone {value!r}") from exc
         return value
+
+    @model_validator(mode="after")
+    def _issue_before_gate(self) -> MarketConfig:
+        if _clock_minutes(self.forecast_issue_local) >= _clock_minutes(
+            self.gate_closure_local
+        ):
+            raise ValueError("forecast_issue_local must be before gate_closure_local")
+        return self
 
     def local_midnight_utc(self, day: date) -> pd.Timestamp:
         """The UTC instant at which local calendar ``day`` begins."""
@@ -119,8 +150,16 @@ class SmardConfig(_Frozen):
         return value
 
 
+class AvailabilityConfig(_Frozen):
+    actuals_lag_minutes: int = Field(ge=0)
+    columns: dict[str, AvailabilityRule]
+
+
 class EvaluationConfig(_Frozen):
     holdout_start: date
+    first_target_day: date
+    validation_start: date
+    spike_threshold_eur_mwh: float = Field(gt=0)
 
 
 class ForecastingConfig(_Frozen):
@@ -133,9 +172,25 @@ class ForecastingConfig(_Frozen):
             raise ValueError("quantiles must be non-empty and strictly between 0 and 1")
         if any(b <= a for a, b in pairwise(value)):
             raise ValueError("quantiles must be strictly increasing")
+        if any(abs(q * 100 - round(q * 100)) > 1e-9 for q in value):
+            raise ValueError(
+                "quantiles must be whole percentages, such as 0.05, so every "
+                "quantile gets its own column name"
+            )
         if 0.5 not in value:
             raise ValueError("quantiles must include the median, 0.5")
         return value
+
+
+class BaselinesConfig(_Frozen):
+    error_window_days: int = Field(ge=7)
+    min_error_days: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _enough_window(self) -> BaselinesConfig:
+        if self.min_error_days > self.error_window_days:
+            raise ValueError("min_error_days cannot exceed error_window_days")
+        return self
 
 
 class BatteryConfig(_Frozen):
@@ -155,8 +210,10 @@ class Settings(_Frozen):
     market: MarketConfig
     data: DataConfig
     smard: SmardConfig
+    availability: AvailabilityConfig
     evaluation: EvaluationConfig
     forecasting: ForecastingConfig
+    baselines: BaselinesConfig
     battery: BatteryConfig
     health: HealthConfig
 
@@ -173,6 +230,33 @@ class Settings(_Frozen):
             raise ValueError(
                 "smard.resolution must equal data.modeling_resolution: no "
                 "resampling policy exists yet (D4)"
+            )
+        ev = self.evaluation
+        if not (
+            self.data.start
+            < ev.first_target_day
+            < ev.validation_start
+            < ev.holdout_start
+        ):
+            raise ValueError(
+                "evaluation dates must satisfy data.start < first_target_day < "
+                "validation_start < holdout_start"
+            )
+        # The longest baseline lag is 14 days; the error window needs that much
+        # history before its first day.
+        needed = timedelta(days=self.baselines.error_window_days + 14)
+        if ev.first_target_day < self.data.start + needed:
+            raise ValueError(
+                f"first_target_day must be at least {needed.days} days after "
+                "data.start so the baselines have a full error window"
+            )
+        expected = set(self.smard.series) | set(DERIVED_COLUMNS)
+        declared = set(self.availability.columns)
+        if declared != expected:
+            raise ValueError(
+                "availability.columns must list exactly the dataset columns; "
+                f"missing {sorted(expected - declared)}, "
+                f"unknown {sorted(declared - expected)}"
             )
         return self
 

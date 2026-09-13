@@ -29,7 +29,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.config import PRICE_SERIES, RESOLUTION_STEP, Settings, load_settings
+from src.config import (
+    PRICE_SERIES,
+    PRODUCT_COLUMN,
+    RESOLUTION_STEP,
+    Settings,
+    load_settings,
+)
 from src.ingest.quality import QualityReport, assert_resolution, build_quality_report
 from src.ingest.smard import SmardClient
 from src.timegrid import HOUR
@@ -55,7 +61,6 @@ REQUIRED_SERIES = (
     *RENEWABLES_ACTUAL,
     *RENEWABLES_FORECAST,
 )
-PRODUCT_COLUMN = "price_product_minutes"
 VOLUME_SUFFIX = "_mw"
 PRICE_SUFFIX = "_eur_mwh"
 
