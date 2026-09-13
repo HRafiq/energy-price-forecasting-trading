@@ -21,14 +21,17 @@ from tests.fakes import day_clock_price, synthetic_market
 class SpyForecaster:
     name = "spy"
     lookback_days: int | None = 3
+    fit_lookback_days: int | None = 5
 
     def __init__(self, settings: Settings) -> None:
         self.quantiles = settings.forecasting.quantiles
         self.fit_days: list[date] = []
+        self.fit_history_starts: list[pd.Timestamp] = []
         self.last_price_seen: list[tuple[date, pd.Timestamp]] = []
 
     def fit(self, info: InformationSet) -> None:
         self.fit_days.append(info.target_day)
+        self.fit_history_starts.append(pd.DatetimeIndex(info.history.index)[0])
 
     def forecast(self, info: InformationSet) -> QuantileForecast:
         last = info.history[PRICE_SERIES].last_valid_index()
@@ -139,3 +142,15 @@ def test_forecasts_that_skip_validation_are_still_checked(settings: Settings) ->
         run_walk_forward(
             _market(settings), MissingValueForecaster(settings), day, settings
         )
+
+
+def test_training_and_forecasting_get_their_own_history_windows(
+    settings: Settings,
+) -> None:
+    spy = SpyForecaster(settings)
+    day = date(2024, 6, 12)
+
+    run_walk_forward(_market(settings), spy, [day], settings)
+
+    day_start = settings.market.local_midnight_utc(day)
+    assert spy.fit_history_starts == [day_start - pd.Timedelta(days=5)]

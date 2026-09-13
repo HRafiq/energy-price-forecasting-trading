@@ -1,1 +1,1 @@
-"""Feature building: calendar, lags, load and renewables forecasts (Phase 2)."""
+"""Feature building from the information set (Phase 2)."""

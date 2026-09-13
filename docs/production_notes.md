@@ -124,13 +124,58 @@ set in `src/forecasting/information.py` removes every value not published at
 requires identical forecasts from a deliberately greedy model and from both
 baselines.
 
-**Plan for Phase 2:** train three feature sets and report the gap in pinball
-loss and in euros. Actuals, the classic leak. SMARD D+1 forecasts, post-gate
-information. Gate-available features only, the honest model. Only the last one
-appears in results. Details and options in `docs/decisions.md`.
+**Measured in Phase 2** (`python -m src.health.experiments.m3_leakage`, results in
+`docs/results/m3_leakage.md`): the same LightGBM quantile model, walk-forward
+over 1 June 2025 to 31 May 2026, on three feature sets.
+
+| feature set | mean pinball | change vs honest | MAE of median, EUR/MWh | spike days, mean pinball |
+|---|---|---|---|---|
+| honest, gate-available only | 4.57 | 0% | 14.22 | 6.85 |
+| adds grid-operator D+1 forecasts, published 18:00 | 3.95 | −13.6% | 12.57 | 6.44 |
+| adds measured D+1 wind, solar and load | 4.00 | −12.5% | 12.72 | 6.24 |
+
+The post-gate forecasts flatter the backtest almost exactly as much as true
+actuals do, because they track actuals so closely. Every reported model uses
+only the honest set; a dashboard built on either leaky set would promise errors
+about 13% smaller than live trading could deliver.
+
+**In my words:** _to write_
+
+## M3 · Leakage through a weather archive (Phase 2: found and blocked)
+
+**What breaks:** Open-Meteo's Previous Runs API labels values as forecasts
+issued 48 hours before valid time. For valid times less than about 45 hours
+ahead it silently returns newer forecasts under that label. A pipeline that
+downloads recent data and trusts the label trains and forecasts on fresher
+weather than was available at 11:40.
+
+**Found by:** the weather ingestion work on 2026-09-13, while verifying the lead
+time on recent dates.
+
+**Mitigation:** ingestion masks every value stamped later than the download time
+plus the lead time minus a 10-hour margin. Every period of the next local day
+stays visible at 11:40. A cached chunk only counts as settled when it ended well
+before the download day; the first version compared with the requested end date
+instead, which an independent review showed could cache fresher values for good.
+
+**In my words:** _to write_
+
+## D1 · Gaps in fuel prices (Phase 2: observed)
+
+**Observed:** the TTF gas ticker follows the US exchange calendar and misses 76
+European trading days. EU carbon auctions pause for about three weeks each
+January.
+
+**Not a gap:** flat, zero-volume TTF bars look like stale prints but are mostly
+real settlement-only days, 183 of 251 bars in 2022. They are kept; dropping them
+erased months of the gas crisis.
+
+**Mitigation:** fuel columns carry the last price published before each day, so
+a missing day repeats the previous price. Gas prices move slowly day to day, so
+a one-day repeat costs little; a three-week carbon pause is visible in the data.
 
 **In my words:** _to write_
 
 ---
 
-Later phases add D1, D5, M1, M2, M4, M5, T1 to T6 and S1.
+Later phases add D5, M1, M2, M4, M5, T1 to T6 and S1.

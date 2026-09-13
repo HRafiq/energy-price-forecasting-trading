@@ -107,3 +107,42 @@ def day_clock_price(tz: str) -> Callable[[pd.DatetimeIndex], NDArray[np.float64]
         return np.asarray(1000.0 * days + clock, dtype=np.float64)
 
     return price
+
+
+def corrupt_unpublished(
+    frame: pd.DataFrame, settings: Settings, target_day: date
+) -> pd.DataFrame:
+    """Overwrite every value not published at the issue time for ``target_day``.
+
+    Written independently of the information set, from the rules in config.
+    """
+    out = frame.astype("float64")
+    idx = pd.DatetimeIndex(out.index)
+    tz = settings.market.timezone
+    start = settings.market.local_midnight_utc(target_day)
+    end = settings.market.local_midnight_utc(target_day + timedelta(days=1))
+    hours, minutes = (int(x) for x in settings.market.forecast_issue_local.split(":"))
+    issue = (
+        (
+            pd.Timestamp(target_day - timedelta(days=1))
+            + pd.Timedelta(hours=hours, minutes=minutes)
+        )
+        .tz_localize(tz)
+        .tz_convert("UTC")
+    )
+    known_until = issue - pd.Timedelta(
+        minutes=settings.availability.actuals_lag_minutes
+    )
+    garbage = -9.0e9
+    out.loc[idx >= end, :] = garbage
+    for column, rule in settings.availability.columns.items():
+        if column not in out.columns:
+            continue
+        if rule == "before_target_day":
+            hidden = idx >= start
+        elif rule == "through_target_day":
+            hidden = idx >= end
+        else:
+            hidden = idx + pd.Timedelta(minutes=15) > known_until
+        out.loc[hidden, column] = garbage
+    return out

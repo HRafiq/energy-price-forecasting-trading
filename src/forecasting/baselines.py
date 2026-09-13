@@ -32,6 +32,7 @@ import pandas as pd
 from numpy.typing import NDArray
 
 from src.config import PRICE_SERIES, Settings
+from src.features.clock import clock_table, values_on
 from src.forecasting.base import (
     ForecastError,
     QuantileForecast,
@@ -39,59 +40,8 @@ from src.forecasting.base import (
     quantile_columns,
 )
 from src.forecasting.information import InformationSet
-from src.timegrid import delivery_periods, ensure_utc_index, expected_periods
 
 __all__ = ["LaggedPriceBaseline", "build_baselines", "clock_table", "values_on"]
-
-_MINUTES_PER_DAY = 24 * 60
-
-
-def _clock_minutes(index: pd.DatetimeIndex, tz: str) -> NDArray[np.int64]:
-    local = index.tz_convert(tz)
-    return np.asarray(local.hour * 60 + local.minute, dtype="int64")
-
-
-def clock_table(price: pd.Series, tz: str, step: pd.Timedelta) -> pd.DataFrame:
-    """Prices with local days as rows and local clock minutes as columns.
-
-    On the autumn DST day the repeated hour keeps its first published value. The
-    spring DST day has no 02:00 to 02:59; those clock times take the last
-    earlier clock time, 01:45 at 15-minute resolution. Data gaps stay NaN.
-    """
-    idx = ensure_utc_index(price.index)
-    step_minutes = int(step / pd.Timedelta(minutes=1))
-    long = pd.DataFrame(
-        {
-            "day": list(idx.tz_convert(tz).date),
-            "clock": _clock_minutes(idx, tz),
-            "price": price.to_numpy(dtype="float64"),
-        }
-    )
-    table = long.groupby(["day", "clock"])["price"].first().unstack("clock")
-    table = table.reindex(columns=list(range(0, _MINUTES_PER_DAY, step_minutes)))
-
-    periods_per_full_day = _MINUTES_PER_DAY // step_minutes
-    observed = long.groupby("day")["clock"].nunique()
-    for day in observed.index[observed < periods_per_full_day]:
-        if expected_periods(day, tz, step) >= periods_per_full_day:
-            continue  # a truncated edge of the history, not a DST day
-        existing = _clock_minutes(delivery_periods(day, tz, step), tz)
-        for column in table.columns:
-            minute = int(column)
-            if minute not in existing:
-                earlier = int(existing[existing < minute].max())
-                table.loc[day, minute] = table.loc[day, earlier]
-    return table
-
-
-def values_on(
-    table: pd.DataFrame, source_day: date, target_index: pd.DatetimeIndex, tz: str
-) -> NDArray[np.float64]:
-    """Prices of ``source_day`` placed on the target periods by local clock time."""
-    if source_day not in table.index:
-        return np.full(len(target_index), np.nan)
-    row = table.loc[source_day]
-    return row.reindex(_clock_minutes(target_index, tz)).to_numpy(dtype="float64")
 
 
 @dataclass(frozen=True)
@@ -109,6 +59,10 @@ class LaggedPriceBaseline:
     @property
     def lookback_days(self) -> int | None:
         return self.error_window_days + max(self.lag_days, self.fallback_lag_days) + 2
+
+    @property
+    def fit_lookback_days(self) -> int | None:
+        return self.lookback_days
 
     def fit(self, info: InformationSet) -> None:
         """Baselines have nothing to learn ahead of time."""

@@ -8,6 +8,8 @@ counted, never scored as zero.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
@@ -17,6 +19,8 @@ from src.forecasting.base import quantile_column
 
 __all__ = [
     "central_intervals",
+    "daily_pinball",
+    "diebold_mariano",
     "pinball",
     "score",
     "segment_scores",
@@ -116,3 +120,46 @@ def yearly_scores(
         for year in np.unique(years)
     }
     return pd.DataFrame(rows).T
+
+
+def daily_pinball(forecasts: pd.DataFrame, quantiles: tuple[float, ...]) -> pd.Series:
+    """Mean pinball loss over all quantiles and periods, per target day."""
+    valid = forecasts[forecasts["actual"].notna()]
+    actual = valid["actual"].to_numpy(dtype="float64")
+    losses = np.mean(
+        [
+            pinball(actual, valid[quantile_column(q)].to_numpy(dtype="float64"), q)
+            for q in quantiles
+        ],
+        axis=0,
+    )
+    return pd.Series(losses, index=valid.index).groupby(valid["target_day"]).mean()
+
+
+def diebold_mariano(
+    loss_a: NDArray[np.float64], loss_b: NDArray[np.float64], max_lag: int = 7
+) -> tuple[float, float]:
+    """Diebold-Mariano test that two forecasts have equal expected loss.
+
+    Pass daily losses on consecutive calendar days, NaN for a day without a
+    loss, so a gap never makes the days around it look like neighbours. The
+    variance is Newey-West with Bartlett weights up to ``max_lag`` days. Returns
+    the statistic and the two-sided p-value; a positive statistic means forecast
+    A has the higher loss.
+    """
+    diff = np.asarray(loss_a, dtype="float64") - np.asarray(loss_b, dtype="float64")
+    finite = np.isfinite(diff)
+    n = int(finite.sum())
+    if n < 2 * max_lag + 2:
+        raise ValueError(f"need at least {2 * max_lag + 2} paired days, got {n}")
+    mean = float(diff[finite].mean())
+    centred = np.where(finite, diff - mean, 0.0)
+    variance = float(centred @ centred) / n
+    for lag in range(1, max_lag + 1):
+        weight = 1.0 - lag / (max_lag + 1)
+        variance += 2.0 * weight * float(centred[lag:] @ centred[:-lag]) / n
+    if variance <= 0.0:
+        return 0.0, 1.0
+    statistic = mean / math.sqrt(variance / n)
+    p_value = math.erfc(abs(statistic) / math.sqrt(2.0))
+    return statistic, p_value
