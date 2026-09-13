@@ -1,0 +1,68 @@
+# Project settings. Validated at load time by src/config.py; a typo fails fast.
+# SMARD publishes volumes as MWh per interval; the dataset stores them as
+# average MW, so any resolution compares directly.
+
+market:
+  bidding_zone: DE-LU
+  timezone: Europe/Berlin
+  gate_closure_local: "12:00"
+  # The DE-LU zone exists from this day. Before it, Germany shared a price
+  # with Austria (DE-AT-LU), so earlier prices are a different market.
+  zone_start: "2018-10-01"
+  # Day-ahead moved to 15-minute products for delivery from this day.
+  quarter_hour_products_from: "2025-10-01"
+
+data:
+  source: smard
+  # Quarter-hourly, the granularity the day-ahead market trades today. Before
+  # market.quarter_hour_products_from the market traded hourly products, so
+  # those quarter-hours repeat their hour's price and price_product_minutes is
+  # 60. See docs/decisions.md.
+  modeling_resolution: quarterhour
+  # A local calendar day in market.timezone.
+  start: "2018-10-01"
+  raw_dir: data/raw
+  processed_dir: data/processed
+  dataset_file: smard_quarterhour.parquet
+
+smard:
+  base_url: https://www.smard.de/app/chart_data
+  region: DE
+  resolution: quarterhour
+  timeout_s: 30
+  max_workers: 4
+  # A weekly chunk counts as settled once this many newer chunks exist. Only a
+  # chunk that had settled when it was downloaded is served from cache; the
+  # current week is incomplete and recent values can still be revised (D2).
+  refresh_recent_chunks: 4
+  # Column name -> SMARD filter id. Volume columns are converted to average MW.
+  series:
+    price_eur_mwh: 4169               # day-ahead price, DE-LU
+    load_actual_mw: 410              # grid load, actual
+    load_forecast_mw: 411            # grid load, day-ahead forecast
+    wind_onshore_actual_mw: 4067
+    wind_offshore_actual_mw: 1225
+    solar_actual_mw: 4068
+    wind_onshore_forecast_mw: 123    # day-ahead forecast
+    wind_offshore_forecast_mw: 3791  # day-ahead forecast
+    solar_forecast_mw: 125           # day-ahead forecast
+
+evaluation:
+  # Final untouched test period (T6). No tuning, no EDA, no model selection
+  # reads data from this local day onward until final reporting in Phase 4.
+  # Proposed, awaiting review: it leaves six months of genuine 15-minute prices
+  # for training. See docs/decisions.md.
+  holdout_start: "2026-04-01"
+
+forecasting:
+  quantiles: [0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95]
+
+battery:
+  power_mw: 1.0
+  capacity_mwh: 2.0
+  round_trip_efficiency: 0.90
+  degradation_eur_per_mwh: 8.0
+
+health:
+  # Rolling 90% interval coverage below this raises a drift alert (M2).
+  coverage_alert_threshold: 0.82

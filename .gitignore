@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- project -------------------------------------------------------------
+# Downloaded and derived data are rebuilt by `python -m src.ingest.build_dataset`.
+data/raw/
+data/processed/
+mlruns/
+.DS_Store
