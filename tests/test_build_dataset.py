@@ -61,6 +61,7 @@ def test_dataset_is_quarter_hourly_utc_and_trimmed_to_last_price(
     assert (index[1:] - index[:-1] == QUARTER).all()
     assert len(frame) == PRICE_PUBLISHED
     assert frame[PRICE_SERIES].notna().all()
+    assert set(frame.columns) == set(settings.availability.columns)
 
 
 def test_volumes_become_average_mw_and_prices_stay_in_eur_per_mwh(

@@ -16,8 +16,11 @@ already published. Energy-Charts had the missing day.
 client re-downloads unsettled weeks on every run, so a late day is picked up on
 a later refresh.
 
-**Still to build, Phase 6 and 7:** the fallback chain when inputs are missing at
-11:40, and an incident record for each occurrence.
+**Since Phase 1:** both baselines fill a missing source day from a second lag,
+then from the last published price, and record how many periods needed it.
+
+**Still to build, Phase 6 and 7:** the full fallback chain from the chosen model
+down to the baselines, and an incident record for each occurrence.
 
 **In my words:** _to write_
 
@@ -113,6 +116,13 @@ day D+1 close. A backtest using it looks better than any live system can be.
 - These forecasts track actuals closely: correlation 0.995 for solar and 0.987
   for onshore wind over the tuning period. A model fed the post-gate forecasts
   gets nearly the advantage it would get from actuals.
+
+**Enforced since Phase 1:** models never see the raw dataset. The information
+set in `src/forecasting/information.py` removes every value not published at
+11:40 on day D, column by column, and refuses columns without a rule.
+`tests/test_information.py` replaces all unpublished data with garbage and
+requires identical forecasts from a deliberately greedy model and from both
+baselines.
 
 **Plan for Phase 2:** train three feature sets and report the gap in pinball
 loss and in euros. Actuals, the classic leak. SMARD D+1 forecasts, post-gate

@@ -481,10 +481,27 @@ residual load built only from gate-available inputs.
 
 ## 11. How the data feeds forecasting
 
-*Planned, Phases 1 and 2.* Target: `price_eur_mwh` for each 15-minute delivery period of
-day D+1. Baselines: naive and seasonal-naive. Model: LightGBM quantile regression at
-seven quantiles, trained walk-forward. This section will document training
-windows, the fill policy for gaps, and the forecast output schema.
+*Phase 1 written; Phase 2 adds the chosen model.*
+
+- **Target:** `price_eur_mwh` for every 15-minute period of day D+1, at seven
+  quantiles, q05 to q95.
+- **Input:** only the information set, the dataset with every cell removed that
+  was not published at 11:40 on day D (§9). Columns without a publication rule
+  are refused.
+- **Baselines:** the price at the same local clock time on day D, and one week
+  before day D+1. Their ranges come from their own errors over the last 28 days,
+  per local hour.
+- **Gaps:** a missing source day falls back to a longer lag, then to the last
+  published price. Those periods take their range from the longer lag's errors,
+  which are wider. With fewer than 14 days of past errors a baseline refuses to
+  forecast instead of showing a precise-looking range. Missing actual prices
+  are skipped in scoring and counted.
+- **Output:** one row per period with the quantile columns, the target day,
+  fallback and quantile-crossing counts, the actual price and the product type.
+- **Evaluation:** walk-forward over training days, scored overall, on the
+  validation window from 1 June 2024, on 15-minute products, on negative-price
+  days and on days above €200. Results:
+  [phase1_baselines.md](results/phase1_baselines.md).
 
 ## 12. How the data feeds trading optimization
 
@@ -507,3 +524,4 @@ panel reads each one.
 | 2026-09-13 | 0 | First version: decision timeline, source, dataset, columns, quality, five figures, gate availability |
 | 2026-09-13 | 0 | Dataset switched to 15-minute periods, volumes in MW, product flag added |
 | 2026-09-13 | 0 | Hold-out start confirmed as 1 Jun 2026 |
+| 2026-09-13 | 1 | Section 11: forecasting inputs, baselines, gaps, output and evaluation |
