@@ -69,10 +69,14 @@ def run_walk_forward(
     parts: list[pd.DataFrame] = []
     last_fit: date | None = None
     for day in days:
-        info = build_information_set(frame, day, settings, forecaster.lookback_days)
         if last_fit is None or (day - last_fit).days >= refit_every_days:
-            forecaster.fit(info)
+            forecaster.fit(
+                build_information_set(
+                    frame, day, settings, forecaster.fit_lookback_days
+                )
+            )
             last_fit = day
+        info = build_information_set(frame, day, settings, forecaster.lookback_days)
         result = forecaster.forecast(info)
         if (
             result.target_day != day
