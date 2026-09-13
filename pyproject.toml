@@ -24,6 +24,7 @@ dependencies = [
     "openpyxl==3.1.5",
     "yfinance==1.7.0",
     "xlrd==2.0.2",
+    "pulp>=3.3,<4",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +50,8 @@ ept-build-dataset = "src.ingest.build_dataset:main"
 packages = ["src"]
 
 [tool.pytest.ini_options]
+# PuLP 3.3 flags its bundled CBC runner for removal in PuLP 4; pulp is pinned below 4.
+filterwarnings = ["ignore:PULP_CBC_CMD is deprecated:DeprecationWarning"]
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q --strict-markers"
@@ -74,5 +77,5 @@ warn_unreachable = true
 files = ["src", "tests"]
 
 [[tool.mypy.overrides]]
-module = ["sklearn.*", "quantile_forest.*", "statsforecast.*", "yfinance.*"]
+module = ["sklearn.*", "quantile_forest.*", "statsforecast.*", "yfinance.*", "pulp.*", "scipy.*"]
 ignore_missing_imports = true

@@ -177,4 +177,55 @@ a one-day repeat costs little; a three-week carbon pause is visible in the data.
 
 ---
 
-Later phases add D5, M1, M2, M4, M5, T1 to T6 and S1.
+## M4 · Negative prices (Phase 3: verified in the optimizer)
+
+**What breaks:** code that assumes a positive price. MAPE divides by it, and a rule
+such as "charge below €30" never expects to be paid to charge. A linear program
+without a binary goes further: at a negative price it charges and discharges at
+once and books profit for burning energy.
+
+**Measured:** a test charges through quarter-hours at -€30 and settles exactly the
+€22.80 the hand calculation gives. Another shows the relaxation booking €3.00 on a
+day whose real optimum is €1.50. Forecast evaluation uses pinball loss and MAE,
+never MAPE.
+
+**Mitigation:** one binary per period forbids charging and discharging at once.
+Settlement multiplies the price by net power, so buying at a negative price earns
+money.
+
+**In my words:** _to write_
+
+---
+
+## T4 · Imbalance risk (Phase 3: out of scope, documented)
+
+**What breaks:** a battery that cannot deliver its committed schedule pays the
+imbalance price on the shortfall.
+
+**Simplification:** the backtest trades day-ahead only, and every schedule is
+feasible by construction. The optimizer respects power, capacity and efficiency,
+and each day starts and ends at the same state of charge, so no day's position
+depends on a forecast being right. Imbalance would come from an outage or from
+intraday trading changing the plan; neither is modelled.
+
+**In my words:** _to write_
+
+---
+
+## T5 · Price-taker assumption (Phase 3: stated)
+
+**Assumption:** the battery's orders do not move the clearing price, and every
+committed MW settles at it. For 1 to 5 MW in a market that clears tens of GW this
+holds; for a portfolio of hundreds of MW it would overstate profit, because selling
+into the evening peak lowers that peak.
+
+**Also left out:** grid fees and taxes, and the auction's volume increments.
+Orders are volumes without limit prices, so a forecast strategy can buy into a
+surprise spike; a desk would bid price-quantity curves. The P&L is trading margin
+net of wear.
+
+**In my words:** _to write_
+
+---
+
+Later phases add D5, M1, M2, M5, T1 to T3, T6 and S1.

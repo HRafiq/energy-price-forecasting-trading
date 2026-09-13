@@ -549,10 +549,77 @@ gas burned.
 
 ## 12. How the data feeds trading optimization
 
-*Planned, Phases 3 and 4.* Inputs: the quantile forecasts for day D+1, realised
-prices for settlement and the perfect-foresight benchmark, and battery parameters
-from `config/settings.yaml`. This section will document how each input enters the
-optimization and how profit and loss is attributed back to forecast errors.
+Phase 3 built the optimizer and the strategies. Phase 4 adds attribution of
+profit and loss back to forecast errors.
+
+**Inputs for one delivery day.**
+
+| Input | Column or setting | Used by |
+|---|---|---|
+| Forecast quantiles for every period | `q05` to `q95`, from the walk-forward forecasts | median and quantile-aware strategies |
+| Realised day-ahead price | `actual` | settlement of every strategy, and perfect foresight's optimization |
+| Product length, 60 or 15 minutes | `price_product_minutes` | tying the quarter-hours of an hourly product together |
+| Battery | `battery` in `config/settings.yaml` | power, capacity, efficiency, wear, start and end state of charge, at most two cycles a day |
+| Strategy levels | `trading.dispatch_quantiles` | which quantiles value each leg of a trade |
+
+**The optimization.** For each quarter-hour the optimizer chooses charge and
+discharge power and tracks the state of charge. It maximizes the value of selling,
+minus the cost of buying, minus wear at €8 per MWh discharged. Each direction keeps
+the square root of the 90% round-trip efficiency. A binary per period stops the
+battery charging and discharging at once. Every day starts and ends half full, so
+days are independent, and a cap of two full cycles a day stands in for a warranty
+limit. Before 1 October 2025 the auction traded whole hours, so the
+four quarter-hours of an hour carry one schedule. The formulation is in
+`src/trading/optimizer.py`.
+
+**The strategies.**
+
+| Strategy | Selling valued at | Buying valued at |
+|---|---|---|
+| Perfect foresight, the ceiling | realised price | realised price |
+| Median forecast | q50 | q50 |
+| Quantile-aware, level 0.25 | q25 | q75 |
+| Quantile-aware, level 0.10 | q10 | q90 |
+
+**Settlement.** Every schedule is committed before the 12:00 gate and paid the
+realised price on each period's net power. Revenue minus wear is the day's P&L, so
+charging at a negative price earns money. The battery is a price taker, and fees
+and taxes are left out.
+
+**Outputs.** `python -m src.trading.run_strategies` writes two files under
+`data/processed/trading/<model>/`:
+
+- `dispatch.parquet`: one row per period and strategy, with charge, discharge and
+  net power in MW, state of charge in MWh, the prices the strategy optimized
+  against and the realised price.
+- `pnl_daily.parquet`: one row per day and strategy, with revenue, wear cost,
+  P&L, energy charged and discharged, cycles, the value the strategy expected and
+  the solve time.
+
+**Validation results, 1 June 2024 to 31 May 2026.** The production forecasts drive
+a 1 MW / 2 MWh battery over 730 days. The full table is in
+`docs/results/phase3_strategies.md`.
+
+| Strategy | P&L, € | Capture ratio | Cycles per day | Losing days |
+|---|---|---|---|---|
+| Perfect foresight | 165,922 | 100.0% | 1.74 | 0 |
+| Median forecast | 149,498 | 90.1% | 1.73 | 15 |
+| Quantile-aware, level 0.25 | 141,504 | 85.3% | 1.25 | 7 |
+| Quantile-aware, level 0.10 | 120,186 | 72.4% | 0.85 | 4 |
+
+- **Median dispatch captures the most.** Both cautious strategies trade less and
+  lose on fewer days, but give up more profit than they protect. Phase 4 tests
+  whether that holds for the other forecast models and on the hold-out.
+- **The cycle cap binds often.** Perfect foresight and median dispatch reach two
+  cycles on about half the days.
+- **The gap to perfect foresight concentrates on a few days.** The ten days with
+  the largest gap carry 14.4% of it. The largest, 12 December 2024, peaked at
+  €936: perfect foresight cycled twice for €1,750, median dispatch once for €1,038.
+- **Quarter-hour products are harder to capture.** Median dispatch captures 91.7%
+  in the hourly-product era and 86.7% since 1 October 2025.
+- **A flat day punishes a confident fan.** On 4 October 2025 prices stayed between
+  -€5 and €4. The forecast showed a spread, so median dispatch cycled twice and
+  lost €25.
 
 ## 13. Dashboard artifacts
 
@@ -571,3 +638,4 @@ panel reads each one.
 | 2026-09-13 | 1 | Section 11: forecasting inputs, baselines, gaps, output and evaluation |
 | 2026-09-13 | 2 | Model-input dataset, gate rows for weather and fuels, section 10 features |
 | 2026-09-13 | 2 | Section 11: candidate models and the production model |
+| 2026-09-13 | 3 | Section 12: optimizer inputs, strategies, settlement and outputs |
