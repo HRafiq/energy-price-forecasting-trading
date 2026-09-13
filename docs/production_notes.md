@@ -1,6 +1,6 @@
 # Production notes
 
-The failure catalogue from the handoff (§6). Each entry records what can break,
+The failure catalogue for the forecasting and trading pipeline. Each entry records what can break,
 what we measured, and the mitigation. Measured facts are filled in as phases
 land; the "In my words" parts are for the project owner to write.
 
@@ -96,8 +96,7 @@ hour.
 `config/settings.yaml`. Config validation refuses a SMARD resolution that
 differs from it, and ingestion raises `GranularityError` if the data's step
 differs. Pre-switch rows carry `price_product_minutes = 60`, and the quality
-report fails if any pre-switch hour has differing quarter-hour prices. See
-`docs/decisions.md`.
+report fails if any pre-switch hour has differing quarter-hour prices.
 
 **In my words:** _to write_
 
