@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.config import PRICE_SERIES, Settings
+from src.config import DERIVED_COLUMNS, PRICE_SERIES, Settings
 from src.ingest.build_dataset import PRODUCT_COLUMN, build_dataset, publish
 from src.ingest.quality import GranularityError, QualityReport
 from src.ingest.smard import SmardClient
@@ -61,7 +61,7 @@ def test_dataset_is_quarter_hourly_utc_and_trimmed_to_last_price(
     assert (index[1:] - index[:-1] == QUARTER).all()
     assert len(frame) == PRICE_PUBLISHED
     assert frame[PRICE_SERIES].notna().all()
-    assert set(frame.columns) == set(settings.availability.columns)
+    assert set(frame.columns) == set(settings.smard.series) | set(DERIVED_COLUMNS)
 
 
 def test_volumes_become_average_mw_and_prices_stay_in_eur_per_mwh(

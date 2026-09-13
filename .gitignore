@@ -222,4 +222,5 @@ __marimo__/
 data/raw/
 data/processed/
 mlruns/
+mlflow.db
 .DS_Store

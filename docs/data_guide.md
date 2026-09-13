@@ -9,8 +9,8 @@ describes the code as it is.
 | Part | Status |
 |---|---|
 | 1 to 8: decision, source, dataset, columns, quality, what the data shows | Written in Phase 0 |
-| 9: what is known at the gate | Phase 0 finding; feature rules fixed in Phase 2 |
-| 10: feature engineering | Planned, Phase 2 |
+| 9: what is known at the gate | Phase 0 finding; enforced since Phases 1 and 2 |
+| 10: feature engineering | Written in Phase 2 |
 | 11: how the data feeds forecasting | Planned, Phases 1 and 2 |
 | 12: how the data feeds trading optimization | Planned, Phases 3 and 4 |
 | 13: dashboard artifacts | Planned, Phase 5 |
@@ -134,6 +134,21 @@ Why SMARD instead of OPSD or ENTSO-E is recorded in
 **Residual load** is the demand left for conventional power plants after wind
 and solar. It is the best single explanation of the price (§8.5). A residual
 value is missing whenever any input is missing; a gap is never treated as zero.
+
+### Model-input dataset
+
+Models read `data/processed/model_inputs_quarterhour.parquet`, built by
+`src/ingest/build_inputs.py`: the SMARD columns above plus these.
+
+| Columns | Meaning | Source | Known at 11:40 on day D for day D+1? |
+|---|---|---|---|
+| `gas_ttf_eur_mwh` | Last Dutch TTF gas futures settlement before the row's local day, €/MWh | Yahoo Finance, TTF=F | Rows up to day D |
+| `carbon_eua_eur_t` | Last EU carbon allowance auction price before the row's local day, €/t | EEX primary auctions | Rows up to day D |
+| `wx_<point>_<variable>` | 36 columns: wind speed at 100 m, shortwave radiation and temperature at 12 points, forecast two days before each period | Open-Meteo Previous Runs | Yes, through day D+1 |
+
+Weather columns are missing before March 2024, when the archive starts. The gas
+ticker follows the US exchange calendar, so some European trading days repeat
+the previous price, and carbon auctions pause for about three weeks each January.
 
 ---
 
@@ -459,8 +474,8 @@ rules with tests.
 | Grid operators' wind and solar forecasts for D+1 | **No** | Submitted 18:00 on day D |
 | Grid operators' wind and solar forecasts for day D | Yes | Submitted 18:00 on day D−1 |
 | Calendar: hour, weekday, holidays, DST | Yes | Deterministic |
-| Gas and carbon closing prices of day D−1 | Yes | Not yet ingested |
-| Weather model runs issued before 11:40 on day D | Yes, if the issue time is known | Candidate source to verify in Phase 2 |
+| Gas settlements and carbon auction prices up to day D−1 | Yes | Ingested in Phase 2 |
+| Weather forecasts issued two days before each period of day D+1 | Yes | Open-Meteo archive from March 2024; fresher values masked at download |
 
 **Consequence.** The dataset's renewable forecast columns, and the forecast
 residual load built from them, describe day D+1 with information that arrives
@@ -472,16 +487,39 @@ options are recorded in [decisions.md](decisions.md).
 
 ## 10. Feature engineering
 
-*Planned, Phase 2.* For each feature this section will give its definition,
-source columns, availability rule from §9, and the test that enforces it.
-Candidate families from the plan: calendar and DST-aware hour position, price
-lags such as the same hour one day and one week earlier, the load forecast, a
-gate-available wind and solar estimate, gas and carbon prices, and an estimated
-residual load built only from gate-available inputs.
+*Written in Phase 2.* `src/features/build.py` builds features from the
+information set only. For a delivery period on day X, every feature uses data
+published by 11:40 on day X−1. `tests/test_features.py` builds features from a
+day's information set and requires them to equal features built from the full
+dataset.
+
+| Group | Features | Built from | Known because |
+|---|---|---|---|
+| Calendar | Clock time, weekday, weekend, national holiday, day of year as sine and cosine, periods in the day, product type | The delivery calendar | Fixed in advance |
+| Price history | Price at the same local clock time 1, 2 and 7 days earlier; the 7-day mean at that time; mean, minimum, maximum, spread and last price of day X−1 | `price_eur_mwh` | Prices up to day X−1 are published |
+| Load | Load forecast, its daily mean, its change from the same time a day earlier | `load_forecast_mw` | Due two hours before the gate |
+| Grid-operator forecasts | Onshore wind, offshore wind and solar forecasts for day X−1 at the same clock time; the load forecast minus those | The forecast columns | Day X−1 forecasts arrived at 18:00 on X−2 |
+| Measured | Mean measured wind, solar and load over the 24 hours before the publication cutoff | The measured columns | The cutoff is three hours before issue |
+| Weather | Mean wind speed onshore and offshore, output share on a generic turbine curve, mean radiation overall and in the south, mean temperature | The 36 `wx_` columns | Forecasts issued two days ahead |
+| Fuels | Gas and carbon prices, and the marginal cost of a gas plant | The fuel columns | Last prices published before day X−1 |
+
+"Same local clock time" handles DST: the day after the spring change uses 01:45
+for its 02:00 to 02:45 periods, and the repeated autumn hour keeps its first
+value.
+
+**Incomplete inputs give missing features, never partial averages.** A weather
+average needs every point, a 24-hour measured average needs every period, and
+statistics of day X−1 need the complete day. Tree models handle the missing
+values; the linear model fills them with training medians.
+
+The turbine curve is a generic stand-in: no output below 3 m/s, rising with the
+cube of wind speed to full output at 12 m/s, and none above 25 m/s. The gas
+plant's marginal cost assumes 55% efficiency and 0.202 tonnes of CO2 per MWh of
+gas burned.
 
 ## 11. How the data feeds forecasting
 
-*Phase 1 written; Phase 2 adds the chosen model.*
+*Written in Phases 1 and 2.*
 
 - **Target:** `price_eur_mwh` for every 15-minute period of day D+1, at seven
   quantiles, q05 to q95.
@@ -502,6 +540,16 @@ residual load built only from gate-available inputs.
   validation window from 1 June 2024, on 15-minute products, on negative-price
   days and on days above €200. Results:
   [phase1_baselines.md](results/phase1_baselines.md).
+- **Models compared in Phase 2:** LEAR-style linear model, LightGBM quantile,
+  LightGBM with conformal ranges, quantile regression forest, MSTL and QRA, over
+  the validation window 1 June 2024 to 31 May 2026. The comparison and the reasons
+  for the choice are in `notebooks/model_comparison.ipynb`.
+- **Production model: LightGBM with conformal ranges.** It trains on two years of
+  features, was refit every 28 days in the comparison, retrains on every
+  production run, and sizes each hour's range from its errors on
+  the last 42 training days. Over the validation window its mean pinball loss is
+  5.11, 46.8% below the naive baseline, and its 90% range covers 85.6% of prices.
+  `src/forecasting/production.py` runs it for one day.
 
 ## 12. How the data feeds trading optimization
 
@@ -525,3 +573,5 @@ panel reads each one.
 | 2026-09-13 | 0 | Dataset switched to 15-minute periods, volumes in MW, product flag added |
 | 2026-09-13 | 0 | Hold-out start confirmed as 1 Jun 2026 |
 | 2026-09-13 | 1 | Section 11: forecasting inputs, baselines, gaps, output and evaluation |
+| 2026-09-13 | 2 | Model-input dataset, gate rows for weather and fuels, section 10 features |
+| 2026-09-13 | 2 | Section 11: candidate models and the production model |
