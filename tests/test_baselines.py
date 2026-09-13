@@ -198,7 +198,7 @@ def test_a_few_missing_periods_never_stop_the_whole_forecast(
 
     assert result.fallback_periods == 4
     actual = frame[PRICE_SERIES].reindex(result.values.index).to_numpy()
-    at_six = np.asarray(result.values.index.tz_convert(TZ).hour == 18)
+    at_six = np.asarray(pd.DatetimeIndex(result.values.index).tz_convert(TZ).hour == 18)
     # Fallback periods: last week's price with the one-day range, 6000 below actual.
     np.testing.assert_allclose(
         result.values["q50"].to_numpy()[at_six], actual[at_six] - 6000.0
