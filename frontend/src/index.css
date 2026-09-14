@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+  background: #0d1522;
+}
+
+body {
+  margin: 0;
+  background: #0d1522;
+  color: #e6ecf5;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Figures line up everywhere, including chart axes and tooltips. */
+.recharts-wrapper,
+.recharts-text,
+.recharts-tooltip-wrapper {
+  font-variant-numeric: tabular-nums;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+}
+
+button:disabled {
+  cursor: not-allowed;
+}

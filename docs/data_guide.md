@@ -675,8 +675,35 @@ suites, `monthly_capture.parquet`, and the attribution tables `costs.parquet` an
 
 ## 13. Dashboard artifacts
 
-*Planned, Phase 5.* The files the backtest writes for the dashboard, and which
-panel reads each one.
+`python -m src.export.artifacts` turns the backtest outputs into one dashboard run,
+`data/processed/dashboard/<run_id>/`, named after its last delivery day. The API in
+`api/` serves it read-only; its contract is `docs/dashboard_api.md`.
+
+| File | What it holds | Panel |
+|---|---|---|
+| `manifest.json` | Every day with its window and whether it traded, the reference battery, the control grid | Header, date picker, controls |
+| `forecasts.parquet` | Walk-forward quantile forecasts of the production model and the naive baseline, validation and hold-out | Fan chart, calibration, error by hour, pinball KPI |
+| `pnl_grid.parquet` | Daily P&L at 1 MW of perfect foresight, median and quantile-aware dispatch, for every duration from 1 to 4 hours and wear price from €0 to €25 | KPI strip, cumulative P&L |
+| `hour_value.parquet` | Cash perfect foresight moves per local hour, reference battery | Value at stake beside error by hour |
+| `attribution.parquet` | Shapley shares of median dispatch's gap to perfect foresight by hour block and error direction, reference battery | Cost of forecast error by direction |
+| `feature_importance.json` | LightGBM gain of the production model trained for the last day | Feature importance |
+
+**How the controls work.** Duration, wear price and the dispatch quantile select a
+pre-computed cell of the grid. Power is applied by scaling: with duration, wear and
+the state-of-charge rules fixed, a price-taking battery's optimal schedule and
+profit scale exactly with its size; a test solves days at two sizes and compares
+schedules, settled P&L and cycles. The day's dispatch chart is the one schedule
+solved live: the API runs the same optimizer for the chosen day and battery,
+median or quantile dispatch plus perfect foresight, in about a tenth of a second. Attribution and value at stake stay on the reference
+battery, 1 MW / 2 MWh with €8 wear, and the dashboard labels them so.
+
+**How the export stays correct.** The grid takes about 50 minutes, so each of its
+104 cells is saved as it finishes and an interrupted export resumes from there. A
+saved cell is reused only if a fingerprint of the forecasts, days, battery and
+strategies still matches; otherwise it is solved again. A day whose solve fails in
+the worker pool is retried once on its own, and the export stops only if it fails
+again. Every file is swapped in whole and the manifest is written last, so the API
+never reads half an export.
 
 ---
 
@@ -693,3 +720,4 @@ panel reads each one.
 | 2026-09-13 | 3 | Section 12: optimizer inputs, strategies, settlement and outputs |
 | 2026-09-14 | 4 | Section 2: ENTSO-E price cross-check and imbalance prices |
 | 2026-09-14 | 4 | Section 12: backtest experiments, hold-out results and outputs |
+| 2026-09-14 | 5 | Section 13: dashboard artifacts and how the controls use them |

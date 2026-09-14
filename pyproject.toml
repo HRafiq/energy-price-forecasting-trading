@@ -25,6 +25,8 @@ dependencies = [
     "yfinance==1.7.0",
     "xlrd==2.0.2",
     "pulp>=3.3,<4",
+    "fastapi==0.141.1",
+    "uvicorn==0.52.4",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +43,7 @@ dev = [
     "pandas-stubs==2.3.0.250703",
     "types-pyyaml==6.0.12.20250516",
     "types-requests==2.32.4.20250611",
+    "httpx==0.28.1",
 ]
 
 [project.scripts]
@@ -75,7 +78,7 @@ python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
 warn_unreachable = true
-files = ["src", "tests"]
+files = ["src", "tests", "api"]
 
 [[tool.mypy.overrides]]
 module = ["sklearn.*", "quantile_forest.*", "statsforecast.*", "yfinance.*", "pulp.*", "scipy.*"]

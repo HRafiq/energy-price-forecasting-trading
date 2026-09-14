@@ -4,9 +4,9 @@ A probabilistic price forecaster feeding a battery dispatch optimiser, backteste
 
 **The finding.** Trading a 1 MW / 2 MWh battery on two years of DE-LU day-ahead prices, my quantile forecast captured 90.1% of the perfect-foresight profit, €74,700 per MW per year, against 77.6% when the same optimiser traded on yesterday's prices. Better forecasts earned more, a rank correlation of -0.83 across eight forecasters, but timing mattered more than size: an evening shifted one hour early lost as much as random noise with twice the average error. What binds is the forecast, not the battery: forecast error cost 9.9% of the achievable profit, while lifting the two-cycle warranty cap would have added only 0.7%. For an operator, the next euro belongs in evening timing and drift monitoring: on an untouched summer hold-out, capture came in 3.4 points below the same months of validation because the forecast degraded.
 
-![Forecast fan and battery schedule for one backtest day](docs/img/example_day.png)
+![Battery trading dashboard on the last hold-out day](docs/img/dashboard.png)
 
-*One validation day: the quantile forecast issued at 11:40 the day before, and the schedule the optimiser committed before the 12:00 gate. The dashboard screenshot replaces this image once Phase 5 ships.*
+*My dashboard on 14 September 2026, the last hold-out day: the forecast issued at 11:40 the day before topped out at €198/MWh and missed the €740/MWh evening peak, yet the schedule solved for a 1 MW / 2 MWh battery earned €964, 93.3% of the €1,034 perfect foresight made. Every control reads backtest results for 835 days.*
 
 ## What's in the system
 
@@ -16,7 +16,7 @@ A probabilistic price forecaster feeding a battery dispatch optimiser, backteste
 | Price forecaster | Quantiles q05 to q95 for every quarter-hour of the next day, issued at 11:40 | LightGBM with conformal ranges, chosen from eight models |
 | Battery optimiser | Charge and discharge schedule for one delivery day | MILP in PuLP with CBC, wear cost, two-cycle cap |
 | Backtester | Walk-forward over two years, profit against perfect foresight, one frozen hold-out | Daily re-solve, Shapley attribution, block bootstrap |
-| Dashboard | Forecast fan, calibration, dispatch, cumulative profit | React and FastAPI, Phase 5 |
+| Dashboard | Forecast fan, calibration, error by hour, the day's schedule and cumulative profit for any battery from 0.5 to 5 MW and 1 to 4 hours | React and FastAPI over exported backtest results; one day's schedule solved on request |
 
 ## Results
 
@@ -49,6 +49,10 @@ The production model is close to calibrated with slightly narrow tails: its 90% 
 | Mean-forecast dispatch | 74,762 | 90.1% | 1.76 | 24 | 90.7% |
 | Quantile-aware dispatch, q25 | 70,752 | 85.3% | 1.25 | 26 | 88.8% |
 | Median dispatch on a naive forecast (yesterday's prices) | 64,418 | 77.6% | 1.73 | 174 | 84.0% |
+
+![Forecast fan and battery schedule for one backtest day](docs/img/example_day.png)
+
+*One validation day: the quantile forecast issued at 11:40 the day before, and the schedule the optimiser committed before the 12:00 gate.*
 
 I froze every choice on the validation window before trading the hold-out, 1 June to 14 September 2026, once. Against the same summer months of validation, 94.3%, the hold-out came in 3.4 points lower.
 
@@ -85,7 +89,8 @@ flowchart LR
   D --> E[Battery optimiser<br/>MILP, PuLP and CBC]
   E --> F[Settlement at<br/>realised prices]
   F --> G[Backtester and<br/>attribution]
-  G --> H[Reports now,<br/>dashboard in Phase 5]
+  G --> H[Exported artifacts]
+  H --> I[FastAPI and<br/>React dashboard]
 ```
 
 ```
@@ -95,6 +100,9 @@ src/features/            features built only from what is known at 11:40
 src/forecasting/         information set, walk-forward harness, eight models, hold-out runner
 src/trading/             battery, MILP optimiser, settlement, strategies, backtest, attribution
 src/health/experiments/  leakage (M3) and outage (T4) experiments
+src/export/              dashboard artifacts: forecasts, P&L grid, attribution
+api/                     read-only FastAPI service behind the dashboard
+frontend/                React, TypeScript and recharts dashboard
 notebooks/               builders for the evaluation notebooks and README figures
 tests/                   network-free tests, including DST days, leakage and toy MILPs
 docs/                    data guide, production notes, results, figures, dashboard mockup
@@ -102,7 +110,7 @@ docs/                    data guide, production notes, results, figures, dashboa
 
 ## Reproduce it
 
-Requires Python 3.11 and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.11 and [uv](https://docs.astral.sh/uv/); the dashboard also needs Node.js 20.19 or newer.
 
 ```bash
 make setup      # uv sync --extra dev --extra eda
@@ -113,6 +121,8 @@ make backtest   # battery strategies, backtest suites, outage stress test
 make holdout    # hold-out forecasts and backtest; runs once, refuses a second run
 make report     # results report and evaluation notebooks
 make figures    # README figures
+make export     # dashboard artifacts, including the P&L grid for 104 battery settings
+make dashboard  # build the React app and serve it with the API at http://127.0.0.1:8000
 make test       # ruff, strict mypy, pytest
 ```
 
