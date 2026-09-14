@@ -654,7 +654,7 @@ for several experiments, without retraining. Full tables are in
 
 - **The hold-out is compared with the same months.** Summer trades differently from
   the year's average; against June to September of 2024 and 2025 the hold-out is
-  3.3 points lower, because the forecast itself was worse in summer 2026.
+  3.4 points lower, because the forecast itself was worse in summer 2026.
 - **Mean and median dispatch earn the same** with the production model; cautious
   quantile-aware dispatch earns less on both windows.
 - **Accuracy and profit mostly rank together,** but an error's timing matters more
