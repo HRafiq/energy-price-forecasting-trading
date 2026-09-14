@@ -383,12 +383,12 @@ commands refuse to run without an explicit confirmation and refuse a second run.
 | Hold-out, June to mid-September 2026 | 91.0% | 306.2 | 6.95 | 77.8% |
 
 Against the whole window the hold-out looks as good as validation. Against the
-same summer months it is 3.3 points lower, and that is the fair comparison. The
+same summer months it is 3.4 points lower, and that is the fair comparison. The
 forecast itself was worse in summer 2026: pinball loss 6.95 against 4.61, and 90%
 ranges covering 77.8% of prices against 85.0%. Profit per day was still higher
 because prices swung more: perfect foresight earned €337 a day against €252 in the
 same months of 2024 and 2025. The naive baseline captured 84.0%, up from 80.8%, so
-the production model's lead over naive narrowed from 13.5 to 7.0 points. LightGBM
+the production model's lead over naive narrowed from 13.6 to 6.9 points. LightGBM
 quantile again traded better than the production model, as on validation; the
 production model was not changed on hold-out evidence.
 
