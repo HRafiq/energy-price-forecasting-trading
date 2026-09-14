@@ -75,10 +75,16 @@ def select_days(
     last: date,
     settings: Settings,
     columns: set[str],
+    *,
+    allow_holdout: bool = False,
 ) -> tuple[list[date], dict[date, str]]:
-    """Complete target days from ``first`` to ``last``, and why others are skipped."""
+    """Complete target days from ``first`` to ``last``, and why others are skipped.
+
+    Hold-out days are refused unless ``allow_holdout`` is set, which only the
+    frozen final evaluation does.
+    """
     holdout = settings.evaluation.holdout_start
-    if last >= holdout:
+    if last >= holdout and not allow_holdout:
         raise HoldoutAccessError(f"{last} is in the hold-out starting {holdout}")
     if first > last:
         raise ValueError(f"first day {first} is after last day {last}")
@@ -139,15 +145,17 @@ def run_strategies(
     holdout_start: date,
     time_limit_s: float = 60.0,
     workers: int = 1,
+    allow_holdout: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[date, str]]:
     """Dispatch and settle every strategy on every day.
 
     Returns the per-period dispatch, the per-day P&L and the days whose solve
-    failed, with the reason. Raises if a day lies in the hold-out, or if a forecast
-    strategy beat perfect foresight on any day, which only a wrong optimizer can do.
+    failed, with the reason. Raises if a day lies in the hold-out without
+    ``allow_holdout``, or if a forecast strategy beat perfect foresight on any day,
+    which only a wrong optimizer can do.
     """
     inside = [day for day in days if day >= holdout_start]
-    if inside:
+    if inside and not allow_holdout:
         raise HoldoutAccessError(
             f"{len(inside)} days fall in the hold-out starting {holdout_start}"
         )
