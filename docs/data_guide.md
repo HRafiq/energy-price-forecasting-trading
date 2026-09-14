@@ -72,6 +72,24 @@ download and time alignment, not SMARD itself.
 
 ---
 
+### ENTSO-E: cross-check and imbalance prices
+
+Phase 4 added the ENTSO-E Transparency Platform, read with a personal API token
+kept in the gitignored `.env` file. Neither download feeds the forecasting models.
+
+- **Day-ahead prices for DE-LU** (`data/processed/entsoe/day_ahead_prices_de_lu.parquet`).
+  ENTSO-E publishes two series for the zone. Position 1 is the coupled 12:00
+  auction; it matches SMARD in every quarter-hour from June 2024 to September 2026,
+  so SMARD's price is confirmed. Position 2 is the separate EXAA auction at 10:15,
+  a different price that must not be mixed with it. Because EXAA clears before the
+  11:40 forecast, it is a candidate feature once its publication time is confirmed.
+- **German imbalance prices** (`data/processed/entsoe/imbalance_prices_de.parquet`).
+  reBAP, the single price at which Germany settles every deviation from a
+  committed schedule, per quarter-hour. It ranged from -€6,643 to €15,000/MWh over
+  the window. The T4 outage experiment settles undelivered volume at it.
+
+Details: `docs/results/entsoe_price_check.md`.
+
 ## 3. The dataset
 
 | Property | Value |
@@ -621,6 +639,40 @@ a 1 MW / 2 MWh battery over 730 days. The full table is in
   -€5 and €4. The forecast showed a spread, so median dispatch cycled twice and
   lost €25.
 
+### Phase 4: backtest, decision value and the hold-out
+
+`python -m src.trading.backtest` reruns the strategies on saved walk-forward forecasts
+for several experiments, without retraining. Full tables are in
+`docs/results/phase4_backtest.md`, charts in `notebooks/backtest_report.ipynb`.
+
+| Question | Validation, 1 Jun 2024 to 31 May 2026 | Hold-out, 1 Jun to 14 Sep 2026 |
+|---|---|---|
+| Capture, production model, median dispatch | 90.1% over the window, 94.3% in June to September | 91.0% |
+| Profit a day, same dispatch | €204.80 over the window, €237.80 in June to September | €306.20 |
+| Forecast pinball loss, June to September | 4.61 | 6.95 |
+| Best capture among the models, median dispatch | QRA 90.9% | LightGBM quantile 92.3% |
+
+- **The hold-out is compared with the same months.** Summer trades differently from
+  the year's average; against June to September of 2024 and 2025 the hold-out is
+  3.3 points lower, because the forecast itself was worse in summer 2026.
+- **Mean and median dispatch earn the same** with the production model; cautious
+  quantile-aware dispatch earns less on both windows.
+- **Accuracy and profit mostly rank together,** but an error's timing matters more
+  than its size: a one-hour shift of the evening with half the average error loses
+  as much as noise everywhere.
+- **Pricing wear at its true cost pays:** telling the optimizer wear is free raises
+  cycling and lowers profit at the true wear.
+- **Forecasts too low cost more than too high,** 55% of the gap on validation and
+  59% on the hold-out, with the evening peak the most expensive place to be low.
+- **An outage is costly when it hits a trade:** two hours at a random time cost €44
+  on average, the worst window of a day €277, settled at the German imbalance price.
+
+**Outputs** under `data/processed/backtest/<suite>/`: `summary.csv` (one row per
+model and strategy, or per experiment variant), `notes.json` (days, skipped days and
+why), `pnl_daily.parquet`, `dispatch.parquet` for the validation and hold-out
+suites, `monthly_capture.parquet`, and the attribution tables `costs.parquet` and
+`days.parquet`. Hold-out forecasts are in `data/processed/forecasts/holdout/`.
+
 ## 13. Dashboard artifacts
 
 *Planned, Phase 5.* The files the backtest writes for the dashboard, and which
@@ -639,3 +691,5 @@ panel reads each one.
 | 2026-09-13 | 2 | Model-input dataset, gate rows for weather and fuels, section 10 features |
 | 2026-09-13 | 2 | Section 11: candidate models and the production model |
 | 2026-09-13 | 3 | Section 12: optimizer inputs, strategies, settlement and outputs |
+| 2026-09-14 | 4 | Section 2: ENTSO-E price cross-check and imbalance prices |
+| 2026-09-14 | 4 | Section 12: backtest experiments, hold-out results and outputs |

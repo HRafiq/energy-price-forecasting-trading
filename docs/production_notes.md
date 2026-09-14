@@ -197,7 +197,7 @@ money.
 
 ---
 
-## T4 · Imbalance risk (Phase 3: out of scope, documented)
+## T4 · Imbalance risk (Phase 4: measured)
 
 **What breaks:** a battery that cannot deliver its committed schedule pays the
 imbalance price on the shortfall.
@@ -205,8 +205,31 @@ imbalance price on the shortfall.
 **Simplification:** the backtest trades day-ahead only, and every schedule is
 feasible by construction. The optimizer respects power, capacity and efficiency,
 and each day starts and ends at the same state of charge, so no day's position
-depends on a forecast being right. Imbalance would come from an outage or from
-intraday trading changing the plan; neither is modelled.
+depends on a forecast being right. Imbalance comes from an outage or from
+intraday trading changing the plan.
+
+**Measured,** validation window, median dispatch: the battery delivers nothing
+during an outage and follows its committed schedule as far as its state of charge
+allows afterwards, with every deviation settled at the German imbalance price,
+reBAP, from ENTSO-E. An average day earns €204.79.
+
+| Outage | Mean cost, € | 95th percentile, € | Worst day, € | Days the cost exceeds the day's profit |
+|---|---|---|---|---|
+| Two hours at a random time | 43.53 | 208 | 5,314 | 7.3% |
+| The worst two-hour window of each day | 277.11 | 751 | 9,772 | 50.8% |
+| Four hours at a random time | 76.31 | 296 | 9,641 | 13.6% |
+
+The damage usually lands after the outage, not in it. On 26 August 2024 a two-hour
+outage from 12:00 missed the midday charge; the committed evening sale then failed
+at 19:45, when reBAP was €13,194, and the day cost €9,772, 48 days of profit.
+Nothing is re-traded on the intraday market once the outage is known, which would
+usually reduce the cost. The figures are not an upper bound either: on 22% of
+random-outage days the outage gains, because a missed charge is paid at reBAP.
+Details: `docs/results/t4_imbalance.md`.
+
+**Mitigation, not yet built:** check availability before bidding, close an outage's
+position on the intraday market instead of leaving it to reBAP, and hold back
+energy on days when the evening carries spike risk.
 
 **In my words:** _to write_
 
@@ -228,4 +251,152 @@ net of wear.
 
 ---
 
-Later phases add D5, M1, M2, M5, T1 to T3, T6 and S1.
+## T1 · Error-direction asymmetry (Phase 4: measured)
+
+**What breaks:** an average error hides which errors cost money. The thesis to test:
+a forecast that is too low in the evening leaves the battery empty when prices
+spike, while errors in flat midday hours cost little.
+
+**Method:** each day's gap to perfect foresight is split into Shapley shares by
+local hour block and by whether the median forecast was too low or too high. A
+group's share is the profit gained by correcting its errors, averaged over many
+orders of correcting the groups, so the shares add up exactly to the gap. Before
+October 2025 an hourly product takes the direction of its mean error.
+
+**Measured,** production model, median dispatch:
+
+| Local hours | Validation: too low, € | Validation: too high, € | Hold-out: too low, € | Hold-out: too high, € |
+|---|---|---|---|---|
+| 00-05 | 693 | 1,177 | 150 | 223 |
+| 06-10 | 2,782 | 892 | 717 | 190 |
+| 11-14 | -30 | 3,540 | -300 | 452 |
+| 15-17 | 3,557 | -271 | 29 | 74 |
+| 18-20 | 2,280 | 963 | 1,561 | 213 |
+| 21-23 | -178 | 1,018 | -255 | 145 |
+| **Gap** | **€16,424 over 730 days** | | **€3,197 over 105 days** | |
+
+- **Too low costs more than too high:** 55% of the gap on validation, 59% on the
+  hold-out.
+- **The evening is where it bites:** forecasts too low from 15:00 to 20:59 cost 36%
+  of the validation gap; on the hold-out, too low from 18:00 to 20:59 alone cost 49%.
+- **Midday is not free:** forecasts too high from 11:00 to 14:59 cost 22% of the
+  validation gap. When the forecast puts the solar valley too high, the battery
+  buys too little or in the wrong quarter-hours.
+
+**Mitigation:** the upper quantiles in the evening matter most; spike prediction
+(M5) and drift monitoring of evening coverage target this directly.
+
+**In my words:** _to write_
+
+---
+
+## T2 · Error cost is not error size (Phase 4: measured)
+
+**What breaks:** judging a forecaster by its average error. A battery's profit
+depends on which hours are cheap and dear and by how much, so two forecasts with
+the same error can earn very different amounts.
+
+**Measured,** validation window, median dispatch, capture of perfect foresight:
+
+| Synthetic forecast | Mean absolute error, €/MWh | Capture |
+|---|---|---|
+| Every price too high by the same amount | 16.0 | 100.0% |
+| Random error in every quarter-hour | 16.0 | 85.1% |
+| Random error only where perfect foresight idles | 16.0 | 79.3% |
+| Random error only where perfect foresight trades | 16.0 | 77.7% |
+| Afternoon and evening prices one hour early | 7.1 | 85.1% |
+
+The error of €16.0 is the production model's own. A level shift leaves every spread
+intact and costs €44 over two years. Shifting the evening one hour early has less
+than half the error and costs as much as noise everywhere. Errors in idle hours are
+not free either: they invent spreads the battery then trades.
+
+Across the eight forecasting models the ranking by accuracy mostly holds, with
+median dispatch capturing 77.6% for naive to 90.9% for QRA. The spread is far wider
+for quantile-aware dispatch at q25: 87.8% for LightGBM quantile but 72.8% for the
+quantile forest, whose wide ranges make it hold back too often.
+
+**Mitigation:** judge forecasts by the profit they produce as well as their error,
+and look at timing and spreads in the spread-defining hours.
+
+**In my words:** _to write_
+
+---
+
+## T3 · Wear against revenue (Phase 4: measured)
+
+**What breaks:** an optimizer that ignores wear cycles on every small spread. The
+revenue looks higher, but the asset pays for it.
+
+**Measured,** validation window, median dispatch, profit always charged the true
+wear of €8 per MWh discharged:
+
+| Wear price given to the optimizer | Cycle cap | Cycles a day | Revenue, € | P&L at true wear, € | Losing days |
+|---|---|---|---|---|---|
+| €0 | 2 a day | 1.90 | 169,322 | 148,223 | 26 |
+| €8 (true) | 2 a day | 1.73 | 168,638 | 149,498 | 15 |
+| €25 | 2 a day | 1.35 | 159,877 | 144,931 | 8 |
+| €0 | none | 2.17 | 170,451 | 146,418 | 28 |
+| €8 (true) | none | 1.76 | 169,269 | 149,721 | 15 |
+
+Ignoring wear raises revenue by €684 but lowers profit by €1,275 with the cap, and
+by €3,303 without it. Perfect foresight shows the same shape: profit at the true
+wear peaks when the optimizer is given the true wear.
+
+**Mitigation:** price wear at its true cost in the optimizer, and keep a cycle cap
+as the warranty limit.
+
+**In my words:** _to write_
+
+---
+
+## D1 · A delivery day without prices (Phase 4: observed)
+
+**Observed:** on 14 September 2026 neither SMARD nor ENTSO-E had day-ahead prices
+for delivery day 13 September 2026, while the days either side were complete.
+
+**Mitigation:** the backtest checks every day for complete prices and forecasts
+before trading it, skips an incomplete day and lists it with the reason in the run
+notes, so a gap cannot turn into a silent zero-profit day.
+
+**In my words:** _to write_
+
+---
+
+## T6 · Backtest overfitting and the hold-out (Phase 4: measured)
+
+**What breaks:** a strategy tuned on the same days that report its result looks
+better than it will trade. Every look at a result is a chance to fit noise.
+
+**Discipline:** every choice, from the forecasting model to the battery limits and
+the headline strategy, was made on the validation window, 1 June 2024 to 31 May
+2026, and recorded before any hold-out forecast existed. The hold-out, 1 June to
+14 September 2026, was then forecast walk-forward once and traded once. Both
+commands refuse to run without an explicit confirmation and refuse a second run.
+
+**Measured,** production model, median dispatch:
+
+| Window | Capture | € a day | Pinball loss | 90% range coverage |
+|---|---|---|---|---|
+| Validation, whole window | 90.1% | 204.8 | 5.11 | 85.6% |
+| Validation, June to September only | 94.3% | 237.8 | 4.61 | 85.0% |
+| Hold-out, June to mid-September 2026 | 91.0% | 306.2 | 6.95 | 77.8% |
+
+Against the whole window the hold-out looks as good as validation. Against the
+same summer months it is 3.3 points lower, and that is the fair comparison. The
+forecast itself was worse in summer 2026: pinball loss 6.95 against 4.61, and 90%
+ranges covering 77.8% of prices against 85.0%. Profit per day was still higher
+because prices swung more: perfect foresight earned €337 a day against €252 in the
+same months of 2024 and 2025. The naive baseline captured 84.0%, up from 80.8%, so
+the production model's lead over naive narrowed from 13.5 to 7.0 points. LightGBM
+quantile again traded better than the production model, as on validation; the
+production model was not changed on hold-out evidence.
+
+**Mitigation:** the coverage drop is what drift monitoring (M2, Phase 6) is meant to
+catch, with an alert when rolling 90% coverage falls below its threshold.
+
+**In my words:** _to write_
+
+---
+
+Later phases add D5, M1, M2, M5 and S1.

@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+import numpy as np
 import pandas as pd
 
 from src.config import Settings
@@ -28,12 +29,15 @@ from src.trading.optimizer import optimize_dispatch, product_blocks
 from src.trading.settlement import Settlement, settle
 
 __all__ = [
+    "MEAN",
+    "MEAN_FORECAST",
     "MEDIAN_FORECAST",
     "PERFECT_FORESIGHT",
     "PRODUCT",
     "REALISED",
     "DayResult",
     "Strategy",
+    "add_mean_forecast",
     "build_strategies",
     "dispatch_day",
     "quantile_aware",
@@ -60,6 +64,35 @@ class Strategy:
 
 PERFECT_FORESIGHT = Strategy("perfect_foresight", REALISED, REALISED)
 MEDIAN_FORECAST = Strategy("median_forecast", "q50", "q50")
+#: Column with the mean of the forecast distribution, see ``add_mean_forecast``.
+MEAN = "mean"
+MEAN_FORECAST = Strategy("mean_forecast", MEAN, MEAN)
+
+
+def add_mean_forecast(
+    frame: pd.DataFrame, quantiles: tuple[float, ...]
+) -> pd.DataFrame:
+    """Add a ``mean`` column: the average of each period's forecast distribution.
+
+    A price taker whose profit is linear in the price earns most on average by
+    optimizing on the expected price, not the median. The quantile forecasts pin
+    the distribution down at a few levels only, so the quantile function is taken
+    as straight lines between them, with the outer slopes extended to levels 0
+    and 1. The mean is the area under that function. Tails heavier than the
+    extended lines, such as rare spikes beyond q95, are underestimated.
+    """
+    levels = np.asarray(sorted(quantiles), dtype=float)
+    if len(levels) < 2:
+        raise ValueError("at least two quantile levels are needed for a mean")
+    columns = [quantile_column(float(level)) for level in levels]
+    values = np.sort(frame[columns].to_numpy(dtype=float), axis=1)
+    widths = np.diff(levels)
+    inner = ((values[:, 1:] + values[:, :-1]) / 2 * widths).sum(axis=1)
+    low_slope = (values[:, 1] - values[:, 0]) / widths[0]
+    high_slope = (values[:, -1] - values[:, -2]) / widths[-1]
+    low_tail = levels[0] * (values[:, 0] - low_slope * levels[0] / 2)
+    high_tail = (1 - levels[-1]) * (values[:, -1] + high_slope * (1 - levels[-1]) / 2)
+    return frame.assign(**{MEAN: inner + low_tail + high_tail})
 
 
 def quantile_aware(level: float) -> Strategy:
