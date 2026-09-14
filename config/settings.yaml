@@ -202,6 +202,9 @@ trading:
   dispatch_quantiles: [0.25, 0.10]
   # CBC solves a real day in well under a second; this only guards a stuck solve.
   solver_time_limit_s: 60
+  # T3: wear prices handed to the optimizer in the degradation sweep. Profit is
+  # always charged the battery's true wear, battery.degradation_eur_per_mwh.
+  degradation_sweep_eur_per_mwh: [0, 2, 4, 8, 12, 16, 25]
 
 health:
   # Rolling 90% interval coverage below this raises a drift alert (M2).
