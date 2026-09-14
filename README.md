@@ -136,6 +136,5 @@ The reasoning and evidence behind each choice, written while building this: [the
 
 ## About me
 
-**Hasan Rafiq.** PhD in Electrical Engineering, 9+ years of applied machine learning in energy, with production experience in load and generation forecasting and battery dispatch optimisation. [LinkedIn](https://www.linkedin.com/in/rafiqh)
+**Hasan Rafiq.** PhD in Electrical Engineering, 9+ years of applied machine learning in energy, with production experience in load and generation forecasting, battery dispatch optimisation, fault detection & diagnosis, and asset health monitoring. [LinkedIn](https://www.linkedin.com/in/rafiqh)
 
-Open to senior and lead data science roles in energy forecasting and optimisation.
