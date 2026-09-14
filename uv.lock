@@ -618,6 +618,7 @@ name = "energy-price-forecasting-trading"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "fastapi" },
     { name = "holidays" },
     { name = "lightgbm" },
     { name = "mlflow" },
@@ -632,12 +633,14 @@ dependencies = [
     { name = "requests" },
     { name = "scikit-learn" },
     { name = "statsforecast" },
+    { name = "uvicorn" },
     { name = "xlrd" },
     { name = "yfinance" },
 ]
 
 [package.optional-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "mypy" },
     { name = "pandas-stubs" },
     { name = "pytest" },
@@ -654,7 +657,9 @@ eda = [
 
 [package.metadata]
 requires-dist = [
+    { name = "fastapi", specifier = "==0.141.1" },
     { name = "holidays", specifier = "==0.104" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = "==0.28.1" },
     { name = "ipykernel", marker = "extra == 'eda'", specifier = "==7.3.0" },
     { name = "lightgbm", specifier = "==4.7.0" },
     { name = "matplotlib", marker = "extra == 'eda'", specifier = "==3.10.3" },
@@ -678,6 +683,7 @@ requires-dist = [
     { name = "statsforecast", specifier = "==2.1.1" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = "==6.0.12.20250516" },
     { name = "types-requests", marker = "extra == 'dev'", specifier = "==2.32.4.20250611" },
+    { name = "uvicorn", specifier = "==0.52.4" },
     { name = "xlrd", specifier = "==2.0.2" },
     { name = "yfinance", specifier = "==1.7.0" },
 ]
@@ -989,6 +995,34 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/71/23/9d0f6c31dda49b50efecdac7b76d979fa37b6267e55bab4907a58f02e8ac/holidays-0.104.tar.gz", hash = "sha256:7e327b255dee3de3c8f7fef58f835ccb7685881ea72176697ff60269c57743b2", size = 1021650, upload-time = "2026-09-07T17:49:30.506Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/63/63/e6d7af3e7cd7ce095aee210204fce64b2ce5164c0c3c79d70e335837886c/holidays-0.104-py3-none-any.whl", hash = "sha256:e0db9ff1d5588e3349bf2de6a597421e39cb7299b64a015170a0a0886940c384", size = 1619592, upload-time = "2026-09-07T17:49:28.243Z" },
+]
+
+[[package]]
+name = "httpcore"
+version = "1.0.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "h11" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/06/94/82699a10bca87a5556c9c59b5963f2d039dbd239f25bc2a63907a05a14cb/httpcore-1.0.9.tar.gz", hash = "sha256:6e34463af53fd2ab5d807f399a9b45ea31c3dfa2276f15a2c3f00afff6e176e8", size = 85484, upload-time = "2025-04-24T22:06:22.219Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/f5/f66802a942d491edb555dd61e3a9961140fd64c90bce1eafd741609d334d/httpcore-1.0.9-py3-none-any.whl", hash = "sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55", size = 78784, upload-time = "2025-04-24T22:06:20.566Z" },
+]
+
+[[package]]
+name = "httpx"
+version = "0.28.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "certifi" },
+    { name = "httpcore" },
+    { name = "idna" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b1/df/48c586a5fe32a0f01324ee087459e112ebb7224f646c0b5023f5e79e9956/httpx-0.28.1.tar.gz", hash = "sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc", size = 141406, upload-time = "2024-12-06T15:37:23.222Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl", hash = "sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad", size = 73517, upload-time = "2024-12-06T15:37:21.509Z" },
 ]
 
 [[package]]

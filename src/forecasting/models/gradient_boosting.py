@@ -134,6 +134,16 @@ class LightGBMConformalModel:
             data.features, data.target
         )
 
+    def feature_importance(self) -> pd.Series:
+        """Total LightGBM gain per feature of the fitted point model, largest first."""
+        if self._model is None:
+            raise ValueError("fit the model before asking for its feature importance")
+        booster = self._model.booster_
+        gains = booster.feature_importance(importance_type="gain")
+        return pd.Series(
+            gains, index=booster.feature_name(), name="gain", dtype="float64"
+        ).sort_values(ascending=False)
+
     def forecast(self, info: InformationSet) -> QuantileForecast:
         assert self._model is not None and self._offsets is not None
         features = target_features(info, self.settings, self._names)
