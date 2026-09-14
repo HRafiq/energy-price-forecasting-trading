@@ -264,6 +264,15 @@ class TradingConfig(_Frozen):
     #: Quantile-aware levels: selling valued at q_level, buying at q_(1 - level).
     dispatch_quantiles: tuple[float, ...] = Field(min_length=1)
     solver_time_limit_s: float = Field(gt=0)
+    #: Wear prices the optimizer is given in the degradation sweep (T3).
+    degradation_sweep_eur_per_mwh: tuple[float, ...] = Field(min_length=1)
+
+    @field_validator("degradation_sweep_eur_per_mwh")
+    @classmethod
+    def _sweep_values(cls, value: tuple[float, ...]) -> tuple[float, ...]:
+        if any(wear < 0 for wear in value) or len(set(value)) != len(value):
+            raise ValueError("degradation sweep values must be unique and non-negative")
+        return tuple(sorted(value))
 
     @field_validator("dispatch_quantiles")
     @classmethod
