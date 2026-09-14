@@ -2,7 +2,7 @@
 UV := uv run
 SUITES := validation decision-value synthetic degradation attribution
 
-.PHONY: help setup data entsoe forecast backtest holdout report figures test
+.PHONY: help setup data entsoe forecast backtest holdout report figures export api web dashboard test
 
 help:
 	@echo "setup     install dependencies with uv"
@@ -13,6 +13,10 @@ help:
 	@echo "holdout   hold-out forecasts and backtest, once, after freezing every choice"
 	@echo "report    results report and notebooks"
 	@echo "figures   README figures in docs/img/"
+	@echo "export    dashboard artifacts from the backtest outputs"
+	@echo "api       dashboard API on port 8000"
+	@echo "web       React dev server on port 5173, proxying the API"
+	@echo "dashboard build the React app and serve it with the API on port 8000"
 	@echo "test      lint, type checks and tests"
 
 setup:
@@ -49,6 +53,19 @@ report:
 
 figures:
 	$(UV) --extra eda python notebooks/build_readme_figures.py
+
+export:
+	$(UV) python -m src.export.artifacts
+
+api:
+	$(UV) uvicorn api.main:app --port 8000
+
+web:
+	cd frontend && npm install && npm run dev
+
+dashboard:
+	cd frontend && npm install && npm run build
+	$(UV) uvicorn api.main:app --port 8000
 
 test:
 	$(UV) ruff check .
