@@ -37,7 +37,6 @@ __all__ = [
     "EvaluationConfig",
     "ForecastingConfig",
     "FuelsConfig",
-    "HealthConfig",
     "MarketConfig",
     "ProductionModel",
     "Resolution",
@@ -284,10 +283,6 @@ class TradingConfig(_Frozen):
         return value
 
 
-class HealthConfig(_Frozen):
-    coverage_alert_threshold: float = Field(gt=0, lt=1)
-
-
 class Settings(_Frozen):
     """Whole-file model for ``config/settings.yaml``."""
 
@@ -302,7 +297,6 @@ class Settings(_Frozen):
     baselines: BaselinesConfig
     battery: Battery
     trading: TradingConfig
-    health: HealthConfig
 
     @model_validator(mode="after")
     def _consistent(self) -> Settings:

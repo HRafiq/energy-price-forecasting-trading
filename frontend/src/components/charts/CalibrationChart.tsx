@@ -1,5 +1,6 @@
 import { CartesianGrid, ComposedChart, Legend, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { CalibrationResponse } from "../../api";
+import { pctPoints } from "../../format";
 import { axisTick, C, legendStyle, tooltipLabelStyle, tooltipStyle } from "../../theme";
 import { tooltipText } from "./common";
 
@@ -13,7 +14,7 @@ export function CalibrationChart({ quantiles }: { quantiles: CalibrationResponse
     .sort((a, b) => a.level - b.level)
     .map((q) => ({
       nominal: Math.round(q.level * 1000) / 10,
-      empirical: Math.round(q.empirical * 1000) / 10,
+      empirical: q.empirical * 100,
     }));
   return (
     <ResponsiveContainer width="100%" height={220}>
@@ -41,7 +42,7 @@ export function CalibrationChart({ quantiles }: { quantiles: CalibrationResponse
           contentStyle={tooltipStyle}
           labelStyle={tooltipLabelStyle}
           labelFormatter={(label) => `Quantile level ${String(label)}%`}
-          formatter={(value) => tooltipText(value, (n) => `${n.toFixed(1)}%`)}
+          formatter={(value) => tooltipText(value, pctPoints)}
           isAnimationActive={false}
         />
         <ReferenceLine segment={IDEAL} stroke={C.faint} strokeDasharray="4 4" />

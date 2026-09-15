@@ -179,8 +179,8 @@ def test_toy_case_matches_hand_calculation() -> None:
 
 
 @pytest.mark.parametrize(("offset", "trades"), [(-0.5, False), (0.5, True)])
-def test_trades_only_beyond_the_primer_breakeven(offset: float, trades: bool) -> None:
-    """Primer §5: selling pays only above buy / 0.90 + wear = 50 / 0.9 + 8.
+def test_trades_only_beyond_the_breakeven(offset: float, trades: bool) -> None:
+    """Selling pays only above buy / 0.90 + wear = 50 / 0.9 + 8.
 
     One hour at €50 then one hour at the sell price. Four full charging quarters
     store 0.9487 MWh and return 0.9 MWh, so the value is 0.9 x (sell - 63.56).
@@ -224,8 +224,8 @@ def test_charges_when_paid_to_at_negative_prices() -> None:
     assert settled.pnl_eur == pytest.approx(22.8, abs=1e-6)
 
 
-def test_binary_blocks_the_primer_energy_burning_loop() -> None:
-    """Primer §13: at -€30 an LP charges 1 MW and discharges 0.9 MW at once.
+def test_binary_blocks_the_energy_burning_loop() -> None:
+    """At -€30 an LP charges 1 MW and discharges 0.9 MW at once.
 
     The state of charge does not move and the net purchase of 0.1 MW earns
     0.25 x 30 x 0.1 = 0.75 per quarter-hour, 3.0 over four. The MILP must
