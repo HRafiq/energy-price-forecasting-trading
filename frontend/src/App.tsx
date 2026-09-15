@@ -17,6 +17,16 @@ import { BUSY_OPACITY, C, FONT_STACK } from "./theme";
 const TABS = ["Overview", "Forecast", "Trading", "Model health"] as const;
 type Tab = (typeof TABS)[number];
 
+/** URL hash for a tab, so a tab can be linked to directly: "Model health" is #model-health. */
+function tabSlug(tab: Tab): string {
+  return tab.toLowerCase().replace(/ /g, "-");
+}
+
+function tabFromHash(): Tab {
+  const slug = window.location.hash.replace(/^#/, "");
+  return TABS.find((t) => tabSlug(t) === slug) ?? "Overview";
+}
+
 const SLIDER_DEBOUNCE_MS = 200;
 const PANEL_ID = "tab-panel";
 
@@ -203,24 +213,35 @@ function Dashboard({ run, grid, tab, onTab }: { run: RunInfo; grid: BatteryGrid;
   else if (forecast.status === "error") context = `Delivery ${longDay(date)} · forecast unavailable: ${forecast.error}`;
   else context = `Delivery ${longDay(date)} · loading forecast…`;
 
+  // The battery and strategy controls and the P&L KPIs do not apply to Model health,
+  // so that tab hides them; the control values are kept for the other tabs.
+  const tradingControls = tab !== "Model health";
+
   return (
     <Shell context={context} holdout={isHoldout} tab={tab} onTab={onTab} runId={runId}>
-      <KpiStrip state={summary} gridAvailable={run.grid_available} />
+      {tradingControls ? <KpiStrip state={summary} gridAvailable={run.grid_available} /> : null}
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-        <Controls
-          values={controls}
-          onChange={update}
-          run={run}
-          grid={grid}
-          days={dayList}
-          daysError={errorOf(days)}
-        />
-        <main id={PANEL_ID} role="tabpanel" aria-labelledby={tabId(tab)} className="lg:col-span-3 min-w-0">
+        {tradingControls ? (
+          <Controls
+            values={controls}
+            onChange={update}
+            run={run}
+            grid={grid}
+            days={dayList}
+            daysError={errorOf(days)}
+          />
+        ) : null}
+        <main
+          id={PANEL_ID}
+          role="tabpanel"
+          aria-labelledby={tabId(tab)}
+          className={`${tradingControls ? "lg:col-span-3" : "lg:col-span-4"} min-w-0`}
+        >
           {tab === "Overview" && <OverviewTab run={runId} date={date} battery={battery} forecast={forecast} />}
           {tab === "Forecast" && <ForecastTab run={runId} windowKey={windowKey} />}
           {tab === "Trading" && <TradingTab run={runId} windowKey={windowKey} battery={battery} gridAvailable={run.grid_available} />}
-          {tab === "Model health" && <ModelHealthTab />}
+          {tab === "Model health" && <ModelHealthTab run={runId} />}
         </main>
       </div>
     </Shell>
@@ -228,7 +249,18 @@ function Dashboard({ run, grid, tab, onTab }: { run: RunInfo; grid: BatteryGrid;
 }
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>("Overview");
+  const [tab, setTab] = useState<Tab>(tabFromHash);
+
+  // Keep the hash and the tab in step without adding history entries.
+  useEffect(() => {
+    const hash = `#${tabSlug(tab)}`;
+    if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
+  }, [tab]);
+  useEffect(() => {
+    const onHash = () => setTab(tabFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   const runs = useApi("runs", (signal) => api.runs(signal));
   const runList = dataOf(runs);

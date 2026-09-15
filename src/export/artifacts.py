@@ -3,6 +3,7 @@
     uv run python -m src.export.artifacts                      # every step
     uv run python -m src.export.artifacts --steps core         # the quick files only
     uv run python -m src.export.artifacts --steps grid --workers 9
+    uv run python -m src.export.artifacts --steps health       # Model health files
 
 A run is one release of the backtest, named after its last delivery day and written
 to ``data/processed/dashboard/<run_id>/``; ``latest.json`` beside the runs names the
@@ -24,6 +25,12 @@ newest one.
   foresight by local hour block and error direction, for the reference battery.
 - ``feature_importance.json``: LightGBM gain of the production model trained for
   the last day.
+- ``health/``: copies of the Phase 6 experiment results the Model health tab reads
+  (``m1_regime_experiment.json``, ``m2_drift.json``, ``d5_deadline.json``), the
+  incident log as one JSON list (``incidents.json``) and ``index.json``, which lists
+  the files present, where each came from, when its source was generated and last
+  modified, and whether M2 ends on the run's last day. A source that does not exist
+  is skipped with a note and any earlier copy of it is removed.
 
 The hold-out was evaluated once in Phase 4. The dashboard reports those days; nothing
 is chosen from them.
@@ -40,6 +47,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from datetime import UTC, date, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +57,7 @@ from src.config import REPO_ROOT, Settings, load_settings
 from src.forecasting.information import build_information_set
 from src.forecasting.models.gradient_boosting import LightGBMConformalModel
 from src.forecasting.production import build_production_model
+from src.health.incidents import default_path, load_incidents
 from src.trading.run_strategies import run_strategies, select_days
 from src.trading.strategies import (
     MEDIAN_FORECAST,
@@ -63,11 +72,14 @@ __all__ = [
     "BASELINE_MODEL",
     "GRID_DEGRADATION_EUR_PER_MWH",
     "GRID_DURATIONS_H",
+    "HEALTH_EXPERIMENTS",
+    "HEALTH_INCIDENTS",
     "POWER_MW",
     "attribution_table",
     "build_manifest",
     "combined_forecasts",
     "dashboard_strategies",
+    "export_health",
     "feature_label",
     "grid_fingerprint",
     "hour_value_table",
@@ -134,6 +146,10 @@ FEATURE_LABELS = {
     "carbon_eua_eur_t": "Carbon price, EU allowances",
     "ccgt_marginal_cost_eur_mwh": "Gas plant marginal cost",
 }
+#: Experiment results the Model health tab reads, from ``<processed>/experiments``.
+HEALTH_EXPERIMENTS = ("m1_regime_experiment.json", "m2_drift.json", "d5_deadline.json")
+#: The incident log, exported as one JSON list rather than JSON Lines.
+HEALTH_INCIDENTS = "incidents.json"
 MODE = (
     "Battery results come from a pre-computed grid at 1 MW for every duration and "
     "wear price, scaled by the power setting. Each day's schedule is solved on "
@@ -254,8 +270,13 @@ def _replace_atomically(path: Path, write: Callable[[Path], object]) -> None:
     """Write beside ``path`` and swap it in, so a reader never sees half a file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(f".{path.name}.partial")
-    write(partial)
-    os.replace(partial, path)
+    try:
+        write(partial)
+        os.replace(partial, path)
+    finally:
+        # After a successful swap the partial is gone; after a failed write it
+        # would otherwise be left beside the real file.
+        partial.unlink(missing_ok=True)
 
 
 def write_parquet(frame: pd.DataFrame, path: Path) -> None:
@@ -465,10 +486,120 @@ def feature_importance(settings: Settings, last_day: date) -> dict[str, Any]:
     }
 
 
+def _utc_stamp(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, UTC).isoformat(timespec="seconds")
+
+
+def _source_entry(name: str, source: Path, label: str) -> dict[str, Any]:
+    """Index entry of one copied file: where it came from and when it was written.
+
+    ``generated_utc`` is the source's own ``generated_utc`` field when it carries
+    one, otherwise its modification time; ``source_modified_utc`` is always the
+    modification time, and ``exported_utc`` when this copy was made.
+    """
+    modified = _utc_stamp(source.stat().st_mtime)
+    generated = modified
+    if source.suffix == ".json":
+        try:
+            stamp = json.loads(source.read_text(encoding="utf-8")).get("generated_utc")
+        except (ValueError, AttributeError):
+            stamp = None
+        if isinstance(stamp, str):
+            generated = stamp
+    return {
+        "file": name,
+        "source": label,
+        "generated_utc": generated,
+        "source_modified_utc": modified,
+        "exported_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+
+
+def _drift_run_match(source: Path, run_dir: Path) -> dict[str, Any]:
+    """Whether M2's last target day is the run's last day, from the manifest."""
+    try:
+        series = json.loads(source.read_text(encoding="utf-8")).get("series") or []
+        last = str(series[-1]["target_day"]) if series else None
+    except (ValueError, AttributeError, KeyError, TypeError):
+        last = None
+    manifest = run_dir / "manifest.json"
+    run_last = None
+    if manifest.exists():
+        try:
+            run_last = json.loads(manifest.read_text(encoding="utf-8")).get("last_day")
+        except (ValueError, AttributeError):
+            run_last = None
+    return {
+        "last_target_day": last,
+        "run_last_day": run_last,
+        "matches_run": last is not None and last == run_last,
+    }
+
+
+def _remove_stale(folder: Path, name: str, label: str) -> None:
+    """Drop a copy whose source is gone, so the tab never shows stale data."""
+    print(f"health: {label} not found, skipped", flush=True)
+    copy = folder / name
+    if copy.exists():
+        copy.unlink()
+        print(f"health: removed the earlier copy of {name}", flush=True)
+
+
+def export_health(settings: Settings, run_dir: Path) -> dict[str, Any]:
+    """Copy the Model health sources into ``<run_dir>/health`` and index them.
+
+    Each file is swapped in whole and ``index.json`` goes last. A missing source is
+    skipped with a printed note and any copy an earlier export left is removed, so
+    the tab answers "not exported" rather than serving data that no longer has a
+    source. M2's entry records whether its last target day is the run's last day.
+    """
+    processed = settings.data.processed_path
+    folder = run_dir / "health"
+    files: dict[str, dict[str, Any]] = {}
+    for name in HEALTH_EXPERIMENTS:
+        source = processed / "experiments" / name
+        label = f"experiments/{name}"
+        if not source.exists():
+            _remove_stale(folder, name, label)
+            continue
+        entry = _source_entry(name, source, label)
+        _replace_atomically(folder / name, partial(shutil.copyfile, source))
+        if name == "m2_drift.json":
+            entry |= _drift_run_match(source, run_dir)
+            if not entry["matches_run"]:
+                print(
+                    f"health: m2_drift.json ends on {entry['last_target_day']}, "
+                    f"the run on {entry['run_last_day']}; rerun M2",
+                    flush=True,
+                )
+        files[name] = entry
+    log = default_path(settings)
+    label = f"health/{log.name}"
+    if log.exists():
+        entry = _source_entry(HEALTH_INCIDENTS, log, label)
+        incidents = load_incidents(log)
+        write_json(
+            [incident.model_dump(mode="json") for incident in incidents],
+            folder / HEALTH_INCIDENTS,
+        )
+        files[HEALTH_INCIDENTS] = entry | {"records": len(incidents)}
+    else:
+        _remove_stale(folder, HEALTH_INCIDENTS, label)
+    index = {
+        "exported_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+        "files": [files[name] for name in sorted(files)],
+    }
+    write_json(index, folder / "index.json")
+    return index
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Write the dashboard artifacts.")
     parser.add_argument(
-        "--steps", nargs="+", choices=("core", "grid"), default=["core", "grid"]
+        "--steps",
+        nargs="+",
+        choices=("core", "grid", "health"),
+        default=["core", "grid", "health"],
     )
     parser.add_argument(
         "--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1)
@@ -481,12 +612,15 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings(args.config)
     model = settings.forecasting.production_model
     forecasts = combined_forecasts(settings, model)
-    days, skipped = traded_days(forecasts, settings)
     run_id = f"backtest-{max(forecasts['target_day'])}"
     root = settings.data.processed_path / "dashboard"
     run_dir = root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    print(f"{run_id}: {len(days)} traded days, {len(skipped)} skipped", flush=True)
+    days: list[date] = []
+    skipped: dict[date, str] = {}
+    if {"core", "grid"} & set(args.steps):
+        days, skipped = traded_days(forecasts, settings)
+        print(f"{run_id}: {len(days)} traded days, {len(skipped)} skipped", flush=True)
 
     if "core" in args.steps:
         # Every file is swapped in whole, and the manifest goes last: the API
@@ -512,6 +646,10 @@ def main(argv: list[str] | None = None) -> int:
         write_parquet(grid, run_dir / "pnl_grid.parquet")
         shutil.rmtree(parts_dir)
         print(f"grid written: {len(grid):,} rows", flush=True)
+
+    if "health" in args.steps:
+        index = export_health(settings, run_dir)
+        print(f"health files written: {len(index['files'])}", flush=True)
 
     write_json({"run_id": run_id}, root / "latest.json")
     print(f"wrote {run_dir}")

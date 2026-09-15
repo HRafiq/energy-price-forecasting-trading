@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+import json
+import shutil
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,12 @@ import pytest
 
 from src.config import Settings
 from src.export import artifacts as art
+from src.health.incidents import (
+    Incident,
+    default_path,
+    make_incident_id,
+    upsert_incidents,
+)
 from src.trading.battery import Battery
 from src.trading.optimizer import optimize_dispatch
 from src.trading.run_strategies import run_strategies
@@ -301,3 +309,140 @@ def test_attribution_table_keeps_median_dispatch_from_both_windows(
         "periods",
         "cost_eur",
     ]
+
+
+def _health_sources(local: Settings) -> Path:
+    processed = local.data.processed_path
+    (processed / "experiments").mkdir(parents=True)
+    (processed / "experiments" / "m1_regime_experiment.json").write_text(
+        '{"experiment": "m1_regime_shift"}', encoding="utf-8"
+    )
+    day = date(2025, 11, 20)
+    incident = Incident(
+        incident_id=make_incident_id("observed", "tail_miss", day),
+        delivery_day=day,
+        detected_utc=datetime(2025, 11, 20, 23, tzinfo=UTC),
+        type="tail_miss",
+        severity="warning",
+        detail="Realised price left the 90% range.",
+        action="Logged for forecast review.",
+        status="review",
+        source="observed",
+    )
+    upsert_incidents([incident], default_path(local))
+    run_dir = processed / "dashboard" / "backtest-x"
+    run_dir.mkdir(parents=True)
+    return run_dir
+
+
+def test_health_step_copies_present_files_and_skips_missing(
+    settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    local = _local(settings, tmp_path)
+    run_dir = _health_sources(local)
+    index = art.export_health(local, run_dir)
+    folder = run_dir / "health"
+    source = local.data.processed_path / "experiments" / "m1_regime_experiment.json"
+    assert (folder / "m1_regime_experiment.json").read_bytes() == source.read_bytes()
+    assert not (folder / "m2_drift.json").exists()
+    assert not (folder / "d5_deadline.json").exists()
+    out = capsys.readouterr().out
+    assert "m2_drift.json not found, skipped" in out
+    assert "d5_deadline.json not found, skipped" in out
+
+    records = json.loads((folder / "incidents.json").read_text(encoding="utf-8"))
+    assert isinstance(records, list) and len(records) == 1
+    assert records[0]["type"] == "tail_miss"
+    listed = {entry["file"]: entry for entry in index["files"]}
+    assert set(listed) == {"m1_regime_experiment.json", "incidents.json"}
+    assert listed["incidents.json"]["records"] == 1
+    assert listed["m1_regime_experiment.json"]["source"] == (
+        "experiments/m1_regime_experiment.json"
+    )
+    assert json.loads((folder / "index.json").read_text(encoding="utf-8")) == index
+    assert not list(folder.glob(".*.partial"))
+
+
+def test_health_step_removes_stale_copies_and_swaps_files_whole(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local = _local(settings, tmp_path)
+    run_dir = _health_sources(local)
+    art.export_health(local, run_dir)
+    source = local.data.processed_path / "experiments" / "m1_regime_experiment.json"
+    copy = run_dir / "health" / "m1_regime_experiment.json"
+    before = copy.read_bytes()
+
+    source.write_text('{"experiment": "m1_regime_shift", "rerun": true}')
+
+    def broken(src: Path, dst: Path) -> None:
+        Path(dst).write_text('{"experiment": "m1_re', encoding="utf-8")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(shutil, "copyfile", broken)
+    with pytest.raises(OSError, match="disk full"):
+        art.export_health(local, run_dir)
+    assert copy.read_bytes() == before
+    monkeypatch.undo()
+    # The failed copy leaves no partial file behind.
+    assert not list((run_dir / "health").glob(".*.partial"))
+
+    # A source that disappears takes its copy with it: no silent stale data.
+    source.unlink()
+    index = art.export_health(local, run_dir)
+    assert copy.name not in {e["file"] for e in index["files"]}
+    assert not copy.exists()
+    default_path(local).unlink()
+    index = art.export_health(local, run_dir)
+    assert index["files"] == []
+    assert not (run_dir / "health" / "incidents.json").exists()
+
+
+def test_health_index_records_times_and_flags_a_drift_from_another_run(
+    settings: Settings, tmp_path: Path
+) -> None:
+    local = _local(settings, tmp_path)
+    run_dir = _health_sources(local)
+    experiments = local.data.processed_path / "experiments"
+    series = [{"target_day": "2026-09-13"}, {"target_day": "2026-09-14"}]
+    (experiments / "m2_drift.json").write_text(
+        json.dumps({"series": series}), encoding="utf-8"
+    )
+    (experiments / "d5_deadline.json").write_text(
+        json.dumps({"generated_utc": "2026-09-01T08:00:00+00:00"}), encoding="utf-8"
+    )
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"last_day": "2026-09-14"}), encoding="utf-8"
+    )
+    listed = {e["file"]: e for e in art.export_health(local, run_dir)["files"]}
+    for entry in listed.values():
+        assert entry["generated_utc"] and entry["source_modified_utc"]
+        assert entry["exported_utc"]
+    deadline = listed["d5_deadline.json"]
+    assert deadline["generated_utc"] == "2026-09-01T08:00:00+00:00"
+    assert deadline["source_modified_utc"] != deadline["generated_utc"]
+    drift = listed["m2_drift.json"]
+    assert drift["matches_run"] is True and drift["last_target_day"] == "2026-09-14"
+
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"last_day": "2026-10-31"}), encoding="utf-8"
+    )
+    listed = {e["file"]: e for e in art.export_health(local, run_dir)["files"]}
+    drift = listed["m2_drift.json"]
+    assert drift["matches_run"] is False and drift["run_last_day"] == "2026-10-31"
+
+
+def test_a_failed_write_leaves_no_partial_file(tmp_path: Path) -> None:
+    path = tmp_path / "out" / "file.json"
+
+    def half(target: Path) -> None:
+        target.write_text("{", encoding="utf-8")
+        raise OSError("disk full")
+
+    with pytest.raises(OSError, match="disk full"):
+        art._replace_atomically(path, half)
+    assert not path.exists()
+    assert not list(path.parent.glob(".*.partial"))
+    art.write_json({"ok": True}, path)
+    assert json.loads(path.read_text(encoding="utf-8")) == {"ok": True}
+    assert not list(path.parent.glob(".*.partial"))

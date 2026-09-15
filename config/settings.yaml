@@ -180,7 +180,7 @@ baselines:
   min_error_days: 14
 
 battery:
-  # The handoff default: a two-hour battery, 1 MW for 2 MWh.
+  # Reference battery: two hours, 1 MW for 2 MWh.
   power_mw: 1.0
   capacity_mwh: 2.0
   # Split evenly between charging and discharging: sqrt(0.90) each way.
@@ -206,6 +206,3 @@ trading:
   # always charged the battery's true wear, battery.degradation_eur_per_mwh.
   degradation_sweep_eur_per_mwh: [0, 2, 4, 8, 12, 16, 25]
 
-health:
-  # Rolling 90% interval coverage below this raises a drift alert (M2).
-  coverage_alert_threshold: 0.82
