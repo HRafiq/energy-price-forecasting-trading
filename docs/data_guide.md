@@ -705,6 +705,62 @@ the worker pool is retried once on its own, and the export stops only if it fail
 again. Every file is swapped in whole and the manifest is written last, so the API
 never reads half an export.
 
+
+## 14. Model health data
+
+Phase 6 adds two kinds of data: an incident log, and the outputs of the failure
+experiments. Both live under `data/processed/`, which is not committed.
+
+**The incident log.** `data/processed/health/incidents.jsonl` holds one JSON record
+per line, validated by `src/health/incidents.py`:
+
+| Field | Meaning |
+|---|---|
+| `incident_id` | 16 hex characters, a hash of source, type, delivery day and an optional key, so a rerun replaces a record instead of duplicating it |
+| `delivery_day` | the delivery day the incident concerns |
+| `detected_utc` | when it was detected, timezone-aware UTC |
+| `type` | `data_gap`, `late_data`, `tail_miss`, `drift`, `pipeline` or `drawdown` |
+| `severity` | `info`, `warning` or `critical` |
+| `detail`, `action` | plain sentences with the numbers, and what was done |
+| `status` | `resolved` or `review` |
+| `source` | `observed` for events found in the saved data, or the experiment that injected or detected it: `m2_drift`, `d5_deadline` |
+| `metrics` | numbers behind the detail |
+
+The file is rewritten whole, sorted by delivery day, type and id, so the same
+records always give the same bytes. Observed records follow fixed rules decided
+before counting:
+
+- **Data gap:** a delivery day the latest dashboard export did not trade, or a day
+  whose production forecast needed fallback periods.
+- **Tail miss:** a day whose realised price left the q05 to q95 range in at least
+  a set share of periods. The share is the 99th percentile of that daily share
+  over the validation window only, and is applied unchanged to the hold-out.
+- **Drift:** each run of consecutive alert days of the drift monitor.
+
+Drift and tail-miss records dated inside the validation window are in-sample: their
+thresholds were fitted on those same days. Records with source `d5_deadline` come
+from injected failures in a simulation, not from real outages.
+
+**Experiment outputs.** Everything below is in `data/processed/experiments/`. M1,
+D1 and D5 never read a hold-out day; M2 reads the saved hold-out forecasts only
+after its thresholds are fixed on validation days.
+
+| File | What it holds | Written by |
+|---|---|---|
+| `m1_regime_forecasts_<arm>.parquet` | 2021 to 2023 walk-forward forecasts per arm: frozen, refit quarterly, refit monthly, naive baseline | M1 |
+| `m1_regime_daily.parquet` | Per day and arm: 90% and 50% coverage, pinball loss, median MAE, spike day, median dispatch and perfect-foresight P&L | M1 |
+| `m1_regime_experiment.json` | Rolling 28-day 90% coverage per arm, and the quarterly, yearly and total tables | M1 |
+| `m2_drift_daily.parquet` | Per day: 90% coverage, pinball loss, their rolling 28-day values and both alert flags | M2 |
+| `m2_drift.json` | Thresholds, the rule that set them, alert runs per window and the daily series | M2 |
+| `d1_forecasts_<arm>.parquet` | Forecasts for the 793 days of the Phase 2 comparison run, 2024-03-30 to 2026-05-31, scored from 2024-06-01: the production model recomputed, with the weather feed blanked, and without weather features | D1 |
+| `d1_missing_weather_daily.parquet` | Per day and arm, including both baselines: pinball loss, median dispatch and perfect-foresight P&L | D1 |
+| `d1_missing_weather.json` | Scores, profit and the cost against the full model per arm | D1 |
+| `d5_deadline_daily.parquet` | Per day: injected failures, the fallback step used, submission time, on time or not, P&L with and without the chain | D5 |
+| `d5_deadline.json` | Setup, measured step runtimes and the summary | D5 |
+
+A `--quick` D1 run writes the same files with a `d1_quick_` prefix, and short M1
+runs write to their own subfolder; neither feeds the dashboard or the docs.
+
 ---
 
 ## Changelog
@@ -721,3 +777,4 @@ never reads half an export.
 | 2026-09-14 | 4 | Section 2: ENTSO-E price cross-check and imbalance prices |
 | 2026-09-14 | 4 | Section 12: backtest experiments, hold-out results and outputs |
 | 2026-09-14 | 5 | Section 13: dashboard artifacts and how the controls use them |
+| 2026-09-15 | 6 | Section 14: incident log and failure experiment outputs |

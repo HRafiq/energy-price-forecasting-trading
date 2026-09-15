@@ -2,7 +2,7 @@
 UV := uv run
 SUITES := validation decision-value synthetic degradation attribution
 
-.PHONY: help setup data entsoe forecast backtest holdout report figures export api web dashboard test
+.PHONY: help setup data entsoe forecast backtest holdout report figures export api web dashboard health experiments test
 
 help:
 	@echo "setup     install dependencies with uv"
@@ -17,6 +17,8 @@ help:
 	@echo "api       dashboard API on port 8000"
 	@echo "web       React dev server on port 5173, proxying the API"
 	@echo "dashboard build the React app and serve it with the API on port 8000"
+	@echo "health    drift monitor (M2) and incident log from saved forecasts"
+	@echo "experiments Phase 6 failure experiments: M1, D1, D5, then M2"
 	@echo "test      lint, type checks and tests"
 
 setup:
@@ -66,6 +68,15 @@ web:
 dashboard:
 	cd frontend && npm install && npm run build
 	$(UV) uvicorn api.main:app --port 8000
+
+health:
+	$(UV) python -m src.health.experiments.m2_drift
+
+experiments:
+	$(UV) python -m src.health.experiments.m1_regime_shift
+	$(UV) python -m src.health.experiments.d1_missing_weather
+	$(UV) python -m src.health.experiments.d5_deadline
+	$(MAKE) health
 
 test:
 	$(UV) ruff check .

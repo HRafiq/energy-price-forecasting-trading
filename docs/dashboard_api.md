@@ -149,3 +149,155 @@ dispatch's gap to perfect foresight by hour block and direction (reference batte
 {"model": "lightgbm_conformal", "trained_for_day": "2026-09-14", "importance": "gain",
  "features": [{"feature": "price_lag_1d", "label": "Price, same quarter-hour yesterday", "gain_share": 0.21}]}
 ```
+
+## Model health
+
+The Model health tab reads four endpoints under `/api/model-health/`; `/api/health`
+stays the service status. They serve the run's `health/` folder, written by
+`python -m src.export.artifacts --steps health` (part of the default steps): copies of
+`m1_regime_experiment.json`, `m2_drift.json` and `d5_deadline.json` from
+`data/processed/experiments/`, the incident log as `incidents.json` (one JSON list)
+and `index.json`, which lists the files present and for each the source it was copied
+from, `generated_utc` (the source's own `generated_utc` field when it has one, otherwise
+its modification time), `source_modified_utc` and `exported_utc`. M2's entry also
+records `last_target_day`, `run_last_day` and `matches_run`. A source that does not
+exist is skipped with a note and any copy an earlier export left is removed, so an
+endpoint answers 503 rather than serving data without a source. A re-export is picked
+up on the next request without a restart: each health file's modification time in
+nanoseconds and its size are part of the cache key, and `index.json` changes with
+every export. The dashboard does not keep model health responses in its session cache.
+
+Nothing is recomputed and nothing is rounded: values are served as the experiments
+wrote them and the dashboard formats them once, rounding ties to the even digit like
+the results docs. Every endpoint serves `generated_utc` for its source (`ops` per
+section), which the tab shows as "as of <date>". `drift` and `ops.drift` also serve
+`last_target_day`, `run_last_day` and `matches_run`; when M2 does not end on the run's
+last day the tab shows a warning. On the September 2026 run the largest response is
+`drift` with every day, about 170 KB (`regime` about 57 KB, `incidents`
+about 32 KB at the default limit and 75 KB at 500, `ops` about 2 KB). M1's
+`coverage_alert_threshold` is not served: the drift threshold comes from M2 alone.
+
+| Status | When |
+|---|---|
+| 422 | An unknown `window` or incident `type`, a malformed `source`, `start` or `end`, `start` after `end`, `limit` outside 1 to 500, a negative `offset`; checked before the run's files are read, so a bad query on a run without a health export is still 422 |
+| 404 | An unknown `run` |
+| 503 | The file an endpoint needs is not in the run's health export, or it is being rewritten; `ops` answers 503 only when the run has no health export at all |
+
+### `GET /api/model-health/regime`
+
+The M1 regime shift backtest, 2021 to 2023: the same model family as production
+(LightGBM with conformal ranges) without weather features, fitted once (`frozen`), refitted every 91 days (`quarterly`) or every 28 days
+(`monthly`), with the naive previous-day baseline for context. `rolling_coverage_90`
+holds one value per arm per date, the share of periods inside the 90% interval over
+the 28 days ending that date. `periods` holds the per-year rows and the total.
+
+```json
+{"experiment": "m1_regime_shift", "generated_utc": "2026-09-15T15:40:53+00:00",
+ "historical_backtest": true,
+ "setup": {"model": "lightgbm_conformal", "training_days": 730, "calibration_days": 42,
+           "first_target_day": "2021-01-01", "last_target_day": "2023-12-31",
+           "feature_groups": ["calendar", "price_history", "load", "grid_operator_forecasts", "measured", "fuels"],
+           "weather_features": false, "arms": [{"name": "frozen", "refit_every_days": null, "description": "..."}],
+           "summary": "...", "spike_threshold_eur_mwh": 200.0, "battery": {"power_mw": 1.0, "...": "..."}},
+ "coverage_target": 0.9,
+ "rolling_coverage_90": {"window_days": 28, "dates": ["2021-01-28", "..."],
+                         "arms": {"frozen": [0.888393, "..."], "quarterly": ["..."], "monthly": ["..."], "naive_previous_day": ["..."]}},
+ "min_rolling_coverage_90": {"frozen": {"value": 0.001488, "window_end": "2022-12-15"}},
+ "periods": [{"arm": "frozen", "period": "2022", "days": 365, "coverage_90": 0.0625, "coverage_50": 0.0162,
+              "pinball": 80.023837, "mae_q50": 167.807163, "capture_ratio": 0.163978, "pnl_eur": 18874.706503,
+              "perfect_foresight_pnl_eur": 115105.034176}]}
+```
+
+### `GET /api/model-health/drift?window`
+
+The M2 drift monitor over the production model's saved forecasts. `window` is
+`validation`, `holdout` or `all` (default) and filters `series`, `episodes` and
+`windows`. Thresholds were fixed on validation days only and applied unchanged to the
+hold-out. `pinball_ratio` is the rolling mean pinball loss over its validation median.
+
+```json
+{"experiment": "m2_drift", "generated_utc": "2026-09-15T15:16:52+00:00", "model": "lightgbm_conformal",
+ "window": "all", "window_days": 28, "holdout_start": "2026-06-01", "rule": "Rolling 28 traded days, ...",
+ "last_target_day": "2026-09-14", "run_last_day": "2026-09-14", "matches_run": true,
+ "thresholds": {"coverage": 0.74, "pinball_ratio": 1.5, "pinball_median": 4.912904, "validation_days": 730,
+                "coverage_alert_share": 0.047945, "pinball_alert_share": 0.042466},
+ "windows": {"holdout": {"days": 105, "coverage_alert_share": 0.028571, "first_coverage_alert": "2026-09-11", "...": "..."}},
+ "episodes": [{"signal": "coverage", "window": "holdout", "start": "2026-09-11", "end": "2026-09-14", "days": 3,
+               "first_value": 0.727679, "extreme_value": 0.674851, "extreme_day": "2026-09-14", "open_at_end": true}],
+ "series": [{"target_day": "2026-09-14", "window": "holdout", "coverage_90": 0.0, "pinball": 65.341323,
+             "rolling_coverage_90": 0.674851, "rolling_pinball_ratio": 1.937204,
+             "coverage_alert": true, "pinball_alert": true}]}
+```
+
+### `GET /api/model-health/incidents?start&end&type&source&limit&offset`
+
+The incident log, newest first (delivery day, then detection time). `type` and
+`source` may repeat (`type=drift&type=tail_miss`); `start` and `end` bound the
+delivery day, inclusive. `limit` defaults to 50, `offset` to 0. `total` counts every
+record matching all filters. `counts.type` applies every filter except `type`, and
+`counts.source` every filter except `source`, so a filter menu shows what each choice
+returns; every type is listed, with 0 when absent. `counts.provenance` counts the
+records matching all filters by provenance, and `source_provenance` maps each source to
+its category.
+
+Each record carries `provenance`: `observed` for `source` `observed` (fixed rules over
+saved backtest outputs), `measured` for `m2_drift` (drift alerts measured on the real
+saved forecasts) and `simulated` for `d5_deadline` (failure injection); a source outside
+these explicit sets counts as `simulated`. `in_sample` is `true` when
+`metrics.in_sample` is 1 (the delivery day lies in the validation window the threshold
+was fitted on), `false` when it is 0 and `null` when the record does not say. The tab
+shows "observed", "measured: drift monitor" or "simulated: D5 deadline", with an
+"in-sample" tag.
+
+```json
+{"generated_utc": "2026-09-15T15:43:04+00:00", "total": 116, "limit": 1, "offset": 0,
+ "counts": {"type": {"data_gap": 1, "late_data": 76, "tail_miss": 11, "drift": 9, "pipeline": 19, "drawdown": 0},
+            "source": {"d5_deadline": 95, "m2_drift": 9, "observed": 12},
+            "provenance": {"observed": 12, "measured": 9, "simulated": 95}},
+ "source_provenance": {"d5_deadline": "simulated", "m2_drift": "measured", "observed": "observed"},
+ "incidents": [{"incident_id": "414e9c2b52e9d1ca", "delivery_day": "2026-09-14",
+                "detected_utc": "2026-09-14T22:00:00Z", "type": "tail_miss", "severity": "warning",
+                "detail": "Realised price left the 90% range in 96 of 96 periods (100.0%, rule cut-off 62.9%). ...",
+                "action": "Logged for forecast review; no automatic action.", "status": "review",
+                "source": "observed", "metrics": {"outside_share": 1.0, "in_sample": 0.0, "...": "..."},
+                "provenance": "observed", "in_sample": false}]}
+```
+
+### `GET /api/model-health/ops`
+
+The operations tiles. `deadline` is the D5 simulation, with failures injected on the
+validation days: the share of days with a forecast before the gate with and without the
+fallback chain, with the nominal `failure_rates`, the `seed` and, when D5 records them,
+the `realised_failure_rates` (share of days each failure type was drawn; `null` in older
+exports). `fallbacks` serves observed fallback activations (observed `data_gap` records
+with fallback forecast periods, over the run's days) and D5's simulated fallback days
+(over the D5 period) side by side; they cover different periods and kinds of evidence
+and are never added. `drift` is the last day of the M2 series, the end of the hold-out. A section whose source is not exported yet
+answers `{"available": false, "detail": "D5 not exported yet"}` (or `"M2 not exported
+yet"`); `fallbacks` then still carries the observed count.
+
+```json
+{"run_id": "backtest-2026-09-14",
+ "deadline": {"available": true, "source": "d5_deadline", "simulation": true,
+              "generated_utc": "2026-09-15T15:43:04+00:00",
+              "period": {"first_day": "2024-06-01", "last_day": "2026-05-31"},
+              "issue_local": "11:40", "gate_local": "12:00",
+              "failure_rates": {"weather_late": 0.1, "model_fails": 0.03, "prices_late": 0.01}, "seed": 6,
+              "realised_failure_rates": {"weather_late": 0.090411, "model_fails": 0.026027, "prices_late": 0.016438},
+              "days": 730, "on_time_share_with_chain": 1.0, "on_time_share_without_chain": 0.869863,
+              "fallback_days": 95,
+              "fallback_by_step": {"fallback_no_weather": 64, "naive_previous_day": 19, "seasonal_naive_previous_week": 12},
+              "latest_submission_minutes_after_issue": 10.000142,
+              "capture_full": 0.901014, "capture_chain": 0.895963, "capture_without_chain": 0.800145},
+ "fallbacks": {"available": true, "simulated_days": 95, "simulated_source": "d5_deadline",
+               "simulated_period": {"first_day": "2024-06-01", "last_day": "2026-05-31"},
+               "simulated_generated_utc": "2026-09-15T16:12:55+00:00",
+               "observed": 0, "observed_rule": "observed data_gap incidents with fallback forecast periods",
+               "observed_period": {"first_day": "2024-06-01", "last_day": "2026-09-14"},
+               "observed_generated_utc": "2026-09-15T16:12:55+00:00"},
+ "drift": {"available": true, "source": "m2_drift", "generated_utc": "2026-09-15T15:16:52+00:00",
+           "as_of": "2026-09-14", "window": "holdout", "window_days": 28, "holdout_start": "2026-06-01",
+           "holdout_days": 105, "last_target_day": "2026-09-14", "run_last_day": "2026-09-14", "matches_run": true,
+           "coverage": {"value": 0.674851, "threshold": 0.74, "alert": true},
+           "pinball_ratio": {"value": 1.937204, "threshold": 1.5, "alert": true}}}
+```

@@ -399,4 +399,124 @@ catch, with an alert when rolling 90% coverage falls below its threshold.
 
 ---
 
-Later phases add D5, M1, M2, M5 and S1.
+Phase 6 adds M2, M1, D1 and D5 below; later phases add M5 and S1.
+
+## M2 · Drift monitoring (Phase 6: measured)
+
+**What breaks:** a model loses calibration gradually. Its ranges stop holding the
+realised price, and nobody notices until profit falls.
+
+**Monitor:** two signals over the last 28 traded days: 90% interval coverage, and
+mean pinball loss divided by its validation median. Both thresholds were fixed on
+validation days only, 1 June 2024 to 31 May 2026, before the hold-out was read:
+coverage takes the highest threshold on a 0.5-point grid with at most 5% of
+validation days in alert, and the pinball ratio the lowest threshold on a 0.05 grid
+with at most 5% of days in alert.
+
+**Measured:** the coverage threshold is 74.0%, with 4.8% of validation days in
+alert; the pinball ratio threshold is 1.50, with 4.2% of days in alert, against a
+validation median of 4.91 €/MWh. On the hold-out the pinball signal first alerted
+on 2 July 2026, 31 days after the start, and was in alert on 6.7% of 105 traded
+days. The coverage signal first alerted only on 11 September 2026, 102 days after
+the start, on 2.9% of days. Coverage over the whole hold-out was 77.8%, but its
+28-day rolling value stayed above 74% until September: a validation run in spring
+2026 that fell to 62.6% had already set a low bar. Each alert run writes one drift incident for retraining review, 9 in total; 5 of
+them fall in the validation window whose days set the thresholds, so they are
+in-sample.
+
+**Mitigation:** run both signals. On the hold-out the pinball ratio alerted first, but
+that is one observation: on validation the longest coverage alert, 28 days from 20
+March 2026, came with no pinball alert at all. A coverage threshold chosen on a window
+that contains its own deep dip reacts late. Which signal leads in the live pipeline is
+decided on validation episodes, not on the hold-out.
+
+**In my words:** _to write_
+
+---
+
+## M1 · Regime shift (Phase 6: measured)
+
+**What breaks:** a model trained in one price regime keeps forecasting that regime.
+A tree ensemble predicts from values learned on its training prices and does not
+extrapolate beyond them, so when the level moves, the median and the ranges stay
+behind and the battery trades on stale spreads.
+
+**Measured:** LightGBM with conformal ranges, 730 training days, no weather features,
+walked through 1 January 2021 to 31 December 2023. Fitted once on 2019 to 2020 prices
+(mean 34 €/MWh, 99th percentile 73 €/MWh), its median peaked at 100.35 €/MWh while prices reached 871 €/MWh. Its 90% coverage was 25.7% over the three years, 6.2% in
+2022 and 2.4% in 2022Q3; its lowest rolling 28-day coverage was 0.1%. It captured
+28.9% of perfect foresight, €61,880 against €214,142. Refitting every 91 days gave
+77.1% coverage and 73.5% capture (€157,475); every 28 days, the production cadence,
+80.6% and 80.7% (€172,807). Refits still lag fast moves: quarterly fell to 47.7%
+coverage in 2022Q3, and monthly to 44.4% over 28 days in autumn 2021.
+
+**Mitigation:** refit at least every 28 days, and alert on rolling coverage and the
+pinball ratio (M2) so a jump in price level triggers an early refit instead of
+waiting for the schedule. Keep the previous-day baseline running as a fallback: it re-anchors on yesterday's
+prices every day and covered 86.2% over the three years, though its rolling 28-day
+coverage fell to 58.8% in autumn 2021 and it captured only 69.8%.
+
+**In my words:** _to write_
+
+---
+
+## D1 · Weather forecast missing at issue time (Phase 6: measured)
+
+**What breaks:** at 11:40 the production model reads archived weather forecasts for
+the delivery day. If the feed has not arrived, the model still runs, but its
+weather inputs are empty and it forecasts from the rest.
+
+**Measured:** on the 730 validation days, with the Phase 2 refit schedule. The
+production model recomputed in the same run matched the saved Phase 2 forecasts
+exactly, so the comparison is like for like. With the delivery day's weather
+blanked and no mitigation, pinball loss rose 50.8%, from 5.11 to 7.70 €/MWh, and 90%
+coverage fell from 85.6% to 74.5%; median dispatch captured 87.8% instead of 90.1%,
+€3,742 less over the two years. A fallback model trained without weather features
+lost less: pinball loss 6.44 €/MWh, coverage 85.2%, capture 88.9%, €1,973 below the
+full model. It recovers about half of the loss and keeps the ranges honest. The
+baselines lose far more: naive previous day captured 77.6% (€20,662 less) and
+seasonal naive previous week 79.7% (€17,206 less).
+
+**Mitigation:** keep a model trained without the feed ready as the first fallback,
+rather than running the full model on empty inputs. Among the baselines, naive
+previous day has the lower pinball loss, 9.61 against 11.49, but seasonal naive
+earned more here; the D5 chain keeps the order fixed before this run, by pinball
+loss.
+
+**In my words:** _to write_
+
+---
+
+## D5 · The 12:00 deadline (Phase 6: simulated)
+
+**What breaks:** the gate closes at 12:00 whether or not the pipeline worked. A day
+without a forecast by then is a day without a position.
+
+**Simulated:** failures injected on the 730 validation days with a fixed seed, as
+scenario assumptions rather than estimates: weather feed late on 10% of days, the
+model step failing on 3%, yesterday's prices late on 1%; the seed drew 9.0%, 2.6%
+and 1.6%. The chain runs the full
+model, then a model without weather, then naive previous day, then seasonal naive
+previous week; late data is retried once after 5 minutes and, in this scenario,
+never arrives. Measured step runtimes are 0.10 s for either model and 0.01 s for a
+baseline, so every forecast was submitted before the gate, the latest 10.0 minutes
+after the 11:40 issue time. That share follows from the assumptions: a hung step or
+a longer wait is not simulated.
+
+**Simulated result:** 95 days needed a fallback: 64 used the model without weather, 19 naive
+previous day and 12 seasonal naive. With the chain, median dispatch earned €148,660,
+89.6% of perfect foresight, €838 below the full model every day. Without it, those
+95 days have no position: 87.0% of days are traded and profit falls to €132,762,
+80.0% capture. Against that counterfactual of no position on failed days, the chain keeps €15,898
+over the two years. Most of it comes from trading at all: on the 64 days when only
+the weather feed was late, running the full model on empty weather inputs would have
+earned €11,253 against €11,311 for the model without weather, €59 less. Each fallback
+day writes an incident marked as simulated: 76 late data, 19 pipeline.
+
+**Mitigation:** the chain itself, with a hard stop on every step so a hung model
+falls through to a baseline instead of waiting past the gate. Phase 7 implements it
+as the Airflow sensor and branch.
+
+**In my words:** _to write_
+
+---

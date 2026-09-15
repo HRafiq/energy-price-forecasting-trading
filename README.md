@@ -16,7 +16,8 @@ A probabilistic price forecaster feeding a battery dispatch optimiser, backteste
 | Price forecaster | Quantiles q05 to q95 for every quarter-hour of the next day, issued at 11:40 | LightGBM with conformal ranges, chosen from eight models |
 | Battery optimiser | Charge and discharge schedule for one delivery day | MILP in PuLP with CBC, wear cost, two-cycle cap |
 | Backtester | Walk-forward over two years, profit against perfect foresight, one frozen hold-out | Daily re-solve, Shapley attribution, block bootstrap |
-| Dashboard | Forecast fan, calibration, error by hour, the day's schedule and cumulative profit for any battery from 0.5 to 5 MW and 1 to 4 hours | React and FastAPI over exported backtest results; one day's schedule solved on request |
+| Model health | Failure experiments measured in euros: a price regime shift, drift, a missing weather feed and the 12:00 deadline; an incident log | Walk-forward reruns, rolling alerts with thresholds fixed on validation, a fallback chain |
+| Dashboard | Forecast fan, calibration, error by hour, the day's schedule, cumulative profit for any battery from 0.5 to 5 MW and 1 to 4 hours, and a Model health tab | React and FastAPI over exported backtest results; one day's schedule solved on request |
 
 ## Results
 
@@ -62,6 +63,19 @@ I froze every choice on the validation window before trading the hold-out, 1 Jun
 
 Better pinball loss mostly means more profit: capture rises from 77.6% for a naive forecast to 90.9% for QRA. Among the four most accurate models, capture differs by only 2.1 points and does not follow the accuracy order. Synthetic forecasts show why: with the same €16/MWh average error, a level shift lost €44 over two years and random noise €24,800, while pulling the evening one hour early lost €24,800 with an error of only €7/MWh.
 
+### Model health
+
+I broke the pipeline on purpose and measured what it cost.
+
+![Model health tab: regime shift and drift monitor](docs/img/model_health.png)
+
+*The Model health tab: rolling 90% coverage through the 2021 to 2023 gas crisis for a model frozen on 2019 to 2020 prices against quarterly and monthly refits, and the drift monitor at the end of the hold-out, 67.5% coverage against its 74.0% alert line.*
+
+- Fitted on 2019 to 2020 and never refitted, the model's 90% range covered 25.7% of prices through the 2021 to 2023 gas crisis and captured 28.9% of perfect foresight. Refitted every 28 days, as in production, it held 80.6% coverage and 80.7% capture.
+- My drift monitor, with thresholds fixed on validation, first alerted 31 days into the hold-out on its pinball-loss signal; the coverage signal took 102 days.
+- A missing weather feed at 11:40 cost 2.3 capture points, €3,742 over two years; falling back to a model trained without weather cut that to €1,973.
+- With pipeline failures injected on 13% of days, my fallback chain still submitted a forecast before the 12:00 gate every day in my simulation, and kept €15,898 that a pipeline without fallbacks, and so without a position on those days, would have lost.
+
 ## Three things I learned
 
 - Timing beat accuracy in my backtest: an evening forecast one hour early, with a €7/MWh average error, cost as much as random noise at €16/MWh.
@@ -74,10 +88,10 @@ Better pinball loss mostly means more profit: capture rises from 77.6% for a nai
 - One 1 MW battery as a price taker, with fixed-volume orders filled at the clearing price; no fleet, grid or market-impact effects.
 - Wear is a flat €8 per MWh discharged with a two-cycle cap, not a cell-ageing model, and each day starts and ends half full.
 - Outages sit outside the headline numbers. Settled at the German imbalance price, a random two-hour outage costs €44 on average, the worst window of a day €277.
-- The hold-out is 105 summer days, public data has gaps, and drift monitoring is not built yet.
+- The hold-out is 105 summer days and public data has gaps. Failure rates in the deadline simulation are assumptions, not measured outages.
 - Not a trading recommendation.
 
-A production system would add a live pipeline with deadline fallbacks, drift alerts, intraday re-optimisation and bid curves. Phases 6 and 7 add the monitoring and the scheduled pipeline.
+A production system would add a live pipeline, intraday re-optimisation and bid curves. Phase 7 adds the scheduled pipeline.
 
 ## Architecture
 
@@ -89,6 +103,8 @@ flowchart LR
   D --> E[Battery optimiser<br/>MILP, PuLP and CBC]
   E --> F[Settlement at<br/>realised prices]
   F --> G[Backtester and<br/>attribution]
+  G --> J[Failure experiments,<br/>drift and incidents]
+  J --> H
   G --> H[Exported artifacts]
   H --> I[FastAPI and<br/>React dashboard]
 ```
@@ -99,7 +115,7 @@ src/ingest/              SMARD, Open-Meteo, fuel and ENTSO-E clients, data-quali
 src/features/            features built only from what is known at 11:40
 src/forecasting/         information set, walk-forward harness, eight models, hold-out runner
 src/trading/             battery, MILP optimiser, settlement, strategies, backtest, attribution
-src/health/experiments/  leakage (M3) and outage (T4) experiments
+src/health/              drift monitor, incident log and failure experiments (M1, M2, M3, T4, D1, D5)
 src/export/              dashboard artifacts: forecasts, P&L grid, attribution
 api/                     read-only FastAPI service behind the dashboard
 frontend/                React, TypeScript and recharts dashboard
@@ -122,6 +138,8 @@ make holdout    # hold-out forecasts and backtest; runs once, refuses a second r
 make report     # results report and evaluation notebooks
 make figures    # README figures
 make export     # dashboard artifacts, including the P&L grid for 104 battery settings
+make experiments # Phase 6 failure experiments: regime shift, missing weather, deadline, drift
+make health     # drift monitor and incident log from saved forecasts
 make dashboard  # build the React app and serve it with the API at http://127.0.0.1:8000
 make test       # ruff, strict mypy, pytest
 ```
