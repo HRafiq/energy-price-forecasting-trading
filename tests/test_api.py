@@ -5,17 +5,19 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
+from api import health as model_health
 from api import service
 from api.main import app
 from src.config import Settings
 from src.export.artifacts import build_manifest
+from src.health.incidents import Incident, IncidentType, make_incident_id
 from src.trading.optimizer import DispatchError
 from tests.test_trading import day_frame
 
@@ -319,3 +321,386 @@ def test_the_autumn_clock_change_has_unique_period_keys(settings: Settings) -> N
         assert len(periods) == 100
         assert len({p["utc"] for p in periods}) == 100
         assert [p["time"] for p in periods].count("02:15") == 2
+
+
+# --- Model health ---------------------------------------------------------------
+
+
+def _incident(
+    day: date, kind: IncidentType, source: str, **metrics: float
+) -> dict[str, object]:
+    return Incident(
+        incident_id=make_incident_id(source, kind, day),
+        delivery_day=day,
+        detected_utc=datetime(day.year, day.month, day.day, 10, tzinfo=UTC),
+        type=kind,
+        severity="warning",
+        detail=f"{kind} on {day}.",
+        action="Logged.",
+        status="review" if source == "observed" else "resolved",
+        source=source,
+        metrics=metrics,
+    ).model_dump(mode="json")
+
+
+HEALTH_INCIDENTS = [
+    _incident(date(2024, 12, 12), "drift", "m2_drift", in_sample=1.0),
+    _incident(date(2024, 12, 13), "tail_miss", "observed"),
+    _incident(date(2025, 3, 1), "data_gap", "observed", fallback_periods=4.0),
+    _incident(date(2025, 3, 2), "late_data", "d5_deadline"),
+    _incident(date(2025, 3, 3), "pipeline", "d5_deadline"),
+    _incident(date(2026, 7, 2), "drift", "m2_drift", in_sample=0.0),
+]
+
+
+def _write_health(folder: Path) -> None:
+    folder.mkdir(parents=True, exist_ok=True)
+    dates = ["2021-01-28", "2021-01-29", "2021-01-30"]
+    regime = {
+        "experiment": "m1_regime_shift",
+        "setup": {
+            "model": "lightgbm_conformal",
+            "training_days": 730,
+            "calibration_days": 42,
+            "feature_groups": ["calendar", "price_history"],
+            "first_target_day": "2021-01-01",
+            "last_target_day": "2023-12-31",
+            "arms": [{"name": "frozen", "refit_every_days": None}],
+        },
+        "coverage_target": 0.9,
+        "coverage_alert_threshold": 0.82,
+        "arms": ["frozen", "monthly"],
+        "rolling_coverage_90": {
+            "window_days": 28,
+            "dates": dates,
+            "arms": {"frozen": [0.8883931, 0.7, 0.6], "monthly": [0.9, 0.91, 0.92]},
+        },
+        "min_rolling_coverage_90": {
+            "frozen": {"value": 0.6, "window_end": "2021-01-30"}
+        },
+        "quarterly": [{"arm": "frozen", "period": "2021Q1"}],
+        "yearly": [
+            {"arm": arm, "period": "2021", "coverage_90": 0.5, "capture_ratio": 0.4}
+            for arm in ("frozen", "monthly")
+        ],
+        "total": [
+            {
+                "arm": "frozen",
+                "period": "total",
+                "coverage_90": 0.3,
+                "capture_ratio": 0.3,
+            }
+        ],
+    }
+    series = [
+        {
+            "target_day": day,
+            "window": window,
+            "coverage_90": 0.9,
+            "pinball": 5.0,
+            "rolling_coverage_90": coverage,
+            "rolling_pinball_ratio": ratio,
+            "coverage_alert": coverage < 0.74,
+            "pinball_alert": ratio > 1.5,
+        }
+        for day, window, coverage, ratio in (
+            ("2026-05-30", "validation", 0.85, 1.0),
+            ("2026-05-31", "validation", 0.73, 1.6),
+            ("2026-06-01", "holdout", 0.8, 1.2),
+            ("2026-06-02", "holdout", 0.674851, 1.937204),
+        )
+    ]
+    drift = {
+        "model": "lightgbm_conformal",
+        "window_days": 28,
+        "holdout_start": "2026-06-01",
+        "rule": "fixed on validation days",
+        "thresholds": {"coverage": 0.74, "pinball_ratio": 1.5},
+        "windows": {"validation": {"days": 2}, "holdout": {"days": 2}},
+        "episodes": [
+            {"signal": "coverage", "window": "validation", "start": "2026-05-31"},
+            {"signal": "pinball", "window": "holdout", "start": "2026-06-02"},
+        ],
+        "series": series,
+    }
+    deadline = {
+        "setup": {"issue_local": "11:40", "gate_local": "12:00", "seed": 6}
+        | {"days": ["2024-06-01", "2026-05-31"]}
+        | {"failure_rates": {"weather_late": 0.1, "model_fails": 0.03}},
+        "realised_failure_rates": {"weather_late": 0.0876, "model_fails": 0.0274},
+        "runtimes_s": {"full": 0.1},
+        "summary": {
+            "days": 730,
+            "on_time_share_with_chain": 1.0,
+            "on_time_share_without_chain": 0.869863,
+            "fallback_days": 95,
+            "fallback_by_step": {"fallback_no_weather": 64},
+            "latest_submission_minutes_after_issue": 10.0,
+            "capture_chain": 0.896,
+        },
+    }
+    for name, payload in (
+        ("m1_regime_experiment.json", regime),
+        ("m2_drift.json", drift),
+        ("d5_deadline.json", deadline),
+        ("incidents.json", HEALTH_INCIDENTS),
+        (
+            "index.json",
+            {
+                "files": [
+                    {"file": name, "generated_utc": f"2026-09-15T1{i}:00"}
+                    for i, name in enumerate(
+                        (
+                            "m1_regime_experiment.json",
+                            "m2_drift.json",
+                            "d5_deadline.json",
+                            "incidents.json",
+                        )
+                    )
+                ]
+            },
+        ),
+    ):
+        (folder / name).write_text(json.dumps(payload), encoding="utf-8")
+
+
+@pytest.fixture
+def health_client(client: TestClient, root: Path) -> Iterator[TestClient]:
+    _write_health(root / RUN / "health")
+    model_health.clear_cache()
+    yield client
+    model_health.clear_cache()
+
+
+def _bump(path: Path) -> None:
+    stat = path.stat()
+    os.utime(path, (stat.st_atime, stat.st_mtime + 10))
+
+
+def test_regime_serves_the_backtest_without_the_stale_alert_line(
+    health_client: TestClient,
+) -> None:
+    body = health_client.get("/api/model-health/regime").json()
+    assert "coverage_alert_threshold" not in json.dumps(body)
+    assert body["coverage_target"] == 0.9 and body["historical_backtest"] is True
+    assert body["setup"]["weather_features"] is False
+    rolling = body["rolling_coverage_90"]
+    assert rolling["dates"] == ["2021-01-28", "2021-01-29", "2021-01-30"]
+    # Served as written: the dashboard formats once, so nothing is pre-rounded.
+    assert rolling["arms"]["frozen"][0] == 0.8883931
+    assert body["generated_utc"] == "2026-09-15T10:00"
+    assert [(p["arm"], p["period"]) for p in body["periods"]] == [
+        ("frozen", "2021"),
+        ("monthly", "2021"),
+        ("frozen", "total"),
+    ]
+    assert "quarterly" not in body
+
+
+@pytest.mark.parametrize(
+    ("window", "days", "episodes"),
+    [("all", 4, 2), ("validation", 2, 1), ("holdout", 2, 1)],
+)
+def test_drift_filters_by_window(
+    health_client: TestClient, window: str, days: int, episodes: int
+) -> None:
+    body = health_client.get(
+        "/api/model-health/drift", params={"window": window}
+    ).json()
+    assert len(body["series"]) == days and len(body["episodes"]) == episodes
+    assert body["thresholds"] == {"coverage": 0.74, "pinball_ratio": 1.5}
+    assert body["generated_utc"] == "2026-09-15T11:00"
+    assert body["matches_run"] is True and body["last_target_day"] == "2026-06-02"
+    assert body["run_last_day"] == "2026-06-02"
+    if window != "all":
+        assert set(body["windows"]) == {window}
+        assert {row["window"] for row in body["series"]} == {window}
+    bad = health_client.get("/api/model-health/drift", params={"window": "x"})
+    assert bad.status_code == 422
+
+
+def test_incidents_newest_first_with_faceted_counts(
+    health_client: TestClient,
+) -> None:
+    body = health_client.get("/api/model-health/incidents").json()
+    assert body["total"] == 6
+    days = [i["delivery_day"] for i in body["incidents"]]
+    assert days == sorted(days, reverse=True)
+    assert body["counts"]["type"]["drift"] == 2
+    assert body["counts"]["type"]["drawdown"] == 0
+    assert body["counts"]["source"] == {"d5_deadline": 2, "m2_drift": 2, "observed": 2}
+    assert body["counts"]["provenance"] == {
+        "observed": 2,
+        "measured": 2,
+        "simulated": 2,
+    }
+    assert body["source_provenance"] == {
+        "d5_deadline": "simulated",
+        "m2_drift": "measured",
+        "observed": "observed",
+    }
+    assert body["generated_utc"] == "2026-09-15T13:00"
+    by_day = {i["delivery_day"]: i for i in body["incidents"]}
+    # Drift alerts are measured on real saved forecasts, not injected.
+    assert by_day["2026-07-02"]["provenance"] == "measured"
+    assert by_day["2026-07-02"]["in_sample"] is False
+    assert by_day["2024-12-12"]["in_sample"] is True
+    assert by_day["2025-03-02"]["provenance"] == "simulated"
+    assert by_day["2025-03-02"]["in_sample"] is None
+    assert "injected" not in by_day["2025-03-02"]
+
+    observed = health_client.get(
+        "/api/model-health/incidents", params={"source": "observed"}
+    ).json()
+    assert observed["total"] == 2
+    assert {i["provenance"] for i in observed["incidents"]} == {"observed"}
+    assert observed["counts"]["provenance"]["measured"] == 0
+    # Type counts follow the source filter; source counts ignore it.
+    assert observed["counts"]["type"]["drift"] == 0
+    assert observed["counts"]["source"]["m2_drift"] == 2
+
+    both = health_client.get(
+        "/api/model-health/incidents",
+        params=[("type", "drift"), ("type", "pipeline"), ("start", "2025-01-01")],
+    ).json()
+    assert [i["type"] for i in both["incidents"]] == ["drift", "pipeline"]
+    assert both["counts"]["source"] == {"d5_deadline": 1, "m2_drift": 1}
+
+    page = health_client.get(
+        "/api/model-health/incidents",
+        params={"limit": 2, "offset": 2, "end": "2025-12-31"},
+    ).json()
+    assert page["total"] == 5 and page["limit"] == 2 and page["offset"] == 2
+    assert [i["delivery_day"] for i in page["incidents"]] == [
+        "2025-03-01",
+        "2024-12-13",
+    ]
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"type": "outage"},
+        {"source": "M2 drift"},
+        {"start": "2025-02-30"},
+        {"start": "2025-03-02", "end": "2025-03-01"},
+        {"limit": 0},
+        {"limit": 501},
+        {"offset": -1},
+    ],
+)
+def test_invalid_incident_queries_are_refused(
+    health_client: TestClient, params: dict[str, object]
+) -> None:
+    response = health_client.get("/api/model-health/incidents", params=params)
+    assert response.status_code == 422 and response.json()["detail"]
+
+
+def test_ops_tiles_and_the_missing_deadline_experiment(
+    health_client: TestClient, root: Path
+) -> None:
+    body = health_client.get("/api/model-health/ops").json()
+    deadline = body["deadline"]
+    assert deadline["available"] is True and deadline["simulation"] is True
+    assert deadline["on_time_share_without_chain"] == 0.869863
+    assert deadline["generated_utc"] == "2026-09-15T12:00"
+    assert deadline["failure_rates"] == {"weather_late": 0.1, "model_fails": 0.03}
+    assert deadline["seed"] == 6
+    assert deadline["realised_failure_rates"]["weather_late"] == 0.0876
+    fallbacks = body["fallbacks"]
+    # Simulated D5 days and observed incidents cover different periods: never summed.
+    assert (fallbacks["simulated_days"], fallbacks["observed"]) == (95, 1)
+    assert "total" not in fallbacks
+    assert fallbacks["simulated_period"] == {
+        "first_day": "2024-06-01",
+        "last_day": "2026-05-31",
+    }
+    assert fallbacks["observed_period"]["last_day"] == "2026-06-02"
+    assert fallbacks["observed_generated_utc"] == "2026-09-15T13:00"
+    drift = body["drift"]
+    assert drift["as_of"] == "2026-06-02" and drift["holdout_days"] == 2
+    assert drift["coverage"] == {"value": 0.674851, "threshold": 0.74, "alert": True}
+    assert drift["pinball_ratio"]["value"] == 1.937204
+    assert drift["generated_utc"] == "2026-09-15T11:00" and drift["matches_run"]
+
+    (root / RUN / "health" / "d5_deadline.json").unlink()
+    body = health_client.get("/api/model-health/ops").json()
+    assert body["deadline"] == {"available": False, "detail": "D5 not exported yet"}
+    assert body["fallbacks"]["available"] is False
+    assert "simulated_days" not in body["fallbacks"]
+    assert body["fallbacks"]["observed"] == 1
+    assert body["drift"]["available"] is True
+
+
+def test_missing_health_files_answer_503(health_client: TestClient, root: Path) -> None:
+    folder = root / RUN / "health"
+    (folder / "m1_regime_experiment.json").unlink()
+    missing = health_client.get("/api/model-health/regime")
+    assert missing.status_code == 503 and "M1" in missing.json()["detail"]
+    assert health_client.get("/api/model-health/drift").status_code == 200
+    for path in folder.iterdir():
+        path.unlink()
+    folder.rmdir()
+    for endpoint in ("regime", "drift", "incidents", "ops"):
+        response = health_client.get(f"/api/model-health/{endpoint}")
+        assert response.status_code == 503, endpoint
+        assert response.json()["detail"]
+    assert health_client.get("/api/model-health/ops?run=nope").status_code == 404
+
+
+def test_a_new_health_export_is_picked_up_without_a_restart(
+    health_client: TestClient, root: Path
+) -> None:
+    assert health_client.get("/api/model-health/incidents").json()["total"] == 6
+    path = root / RUN / "health" / "incidents.json"
+    path.write_text(json.dumps(HEALTH_INCIDENTS[:2]), encoding="utf-8")
+    _bump(path)
+    assert health_client.get("/api/model-health/incidents").json()["total"] == 2
+    path.write_text("[{", encoding="utf-8")
+    _bump(path)
+    assert health_client.get("/api/model-health/incidents").status_code == 503
+
+
+def test_drift_that_does_not_end_on_the_run_last_day_is_flagged(
+    health_client: TestClient, root: Path
+) -> None:
+    path = root / RUN / "health" / "m2_drift.json"
+    drift = json.loads(path.read_text(encoding="utf-8"))
+    drift["series"] = drift["series"][:-1]
+    path.write_text(json.dumps(drift), encoding="utf-8")
+    _bump(path)
+    body = health_client.get("/api/model-health/drift").json()
+    assert body["matches_run"] is False
+    assert (body["last_target_day"], body["run_last_day"]) == (
+        "2026-06-01",
+        "2026-06-02",
+    )
+    assert (
+        health_client.get("/api/model-health/ops").json()["drift"]["matches_run"]
+        is False
+    )
+
+
+def test_a_same_timestamp_rewrite_is_picked_up_by_its_size(
+    health_client: TestClient, root: Path
+) -> None:
+    path = root / RUN / "health" / "incidents.json"
+    stat = path.stat()
+    assert health_client.get("/api/model-health/incidents").json()["total"] == 6
+    path.write_text(json.dumps(HEALTH_INCIDENTS[:3]), encoding="utf-8")
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert path.stat().st_mtime_ns == stat.st_mtime_ns
+    assert health_client.get("/api/model-health/incidents").json()["total"] == 3
+
+
+@pytest.mark.parametrize(
+    "params",
+    [{"limit": 0}, {"type": "outage"}, {"start": "2025-02-30"}, {"offset": -1}],
+)
+def test_a_bad_incident_query_is_refused_before_the_missing_export(
+    client: TestClient, params: dict[str, object]
+) -> None:
+    model_health.clear_cache()
+    response = client.get("/api/model-health/incidents", params=params)
+    assert response.status_code == 422, response.json()
+    assert client.get("/api/model-health/incidents").status_code == 503

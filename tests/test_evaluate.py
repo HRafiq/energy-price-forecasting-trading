@@ -41,7 +41,7 @@ def _table(actuals: list[float], day: date, product: int = 15) -> pd.DataFrame:
     return frame
 
 
-def test_pinball_matches_the_primer_example() -> None:
+def test_pinball_matches_a_worked_example() -> None:
     assert pinball(np.array([120.0]), np.array([100.0]), 0.9)[0] == pytest.approx(18.0)
     assert pinball(np.array([80.0]), np.array([100.0]), 0.9)[0] == pytest.approx(2.0)
 

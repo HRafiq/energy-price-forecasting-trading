@@ -11,9 +11,31 @@ export function eur(value: number): string {
   return `${sign}€ ${eurWhole.format(Math.abs(rounded))}`;
 }
 
-/** Share (0..1) as a percentage with one decimal: "91.2%". */
+/**
+ * Rounds to `decimals` places, resolving exact ties to the even digit, like the
+ * Python formatting that writes the results docs: 86.245 -> 86.2, 6.25 -> 6.2.
+ * The tolerance absorbs float noise such as 0.86245 * 100 = 86.24499999999999.
+ */
+export function roundHalfEven(value: number, decimals: number): number {
+  const factor = 10 ** decimals;
+  const scaled = value * factor;
+  const floor = Math.floor(scaled);
+  const fraction = scaled - floor;
+  let whole: number;
+  if (Math.abs(fraction - 0.5) < 1e-6) whole = floor % 2 === 0 ? floor : floor + 1;
+  else whole = Math.round(scaled);
+  return whole / factor;
+}
+
+/** A value already in percent points with one decimal: 86.245 -> "86.2%". */
+export function pctPoints(points: number): string {
+  const rounded = roundHalfEven(points, 1);
+  return `${(Object.is(rounded, -0) ? 0 : rounded).toFixed(1)}%`;
+}
+
+/** Share (0..1) as a percentage with one decimal, ties to even: "91.2%". */
 export function pct(share: number): string {
-  return `${(share * 100).toFixed(1)}%`;
+  return pctPoints(share * 100);
 }
 
 /** Plain number with fixed decimals and a real minus sign. */
@@ -52,6 +74,25 @@ export function shortDay(date: string): string {
   const d = isoDate(date);
   if (Number.isNaN(d.getTime())) return date;
   return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}`;
+}
+
+/** "Nov 2025" */
+export function monthFullYear(date: string): string {
+  const d = isoDate(date);
+  if (Number.isNaN(d.getTime())) return date;
+  return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+/** "21 Nov 2025", no weekday: for both ends of a period. */
+export function dayMonthYear(date: string): string {
+  const d = isoDate(date);
+  if (Number.isNaN(d.getTime())) return date;
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+/** An ISO UTC timestamp's calendar day: "2026-09-15T15:43:04+00:00" -> "15 Sep 2026". */
+export function utcDay(timestamp: string): string {
+  return dayMonthYear(timestamp.slice(0, 10));
 }
 
 /** "Nov 25" */

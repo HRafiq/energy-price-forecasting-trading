@@ -185,6 +185,205 @@ export interface FeatureImportanceResponse {
 }
 
 // ------------------------------------------------------------------------------
+// Model health (/api/model-health/*)
+// ------------------------------------------------------------------------------
+
+export type RegimeArm = "frozen" | "quarterly" | "monthly" | "naive_previous_day";
+export type DriftWindow = "validation" | "holdout" | "all";
+export type IncidentType = "data_gap" | "late_data" | "tail_miss" | "drift" | "pipeline" | "drawdown";
+
+export interface RegimePeriod {
+  arm: string;
+  period: string;
+  days: number | null;
+  coverage_90: number | null;
+  coverage_50: number | null;
+  pinball: number | null;
+  mae_q50: number | null;
+  capture_ratio: number | null;
+  pnl_eur: number | null;
+  perfect_foresight_pnl_eur: number | null;
+}
+
+export interface RegimeResponse {
+  experiment: string;
+  generated_utc: string | null;
+  historical_backtest: boolean;
+  setup: {
+    summary: string | null;
+    model: string | null;
+    training_days: number | null;
+    calibration_days: number | null;
+    first_target_day: string | null;
+    last_target_day: string | null;
+    feature_groups: string[];
+    weather_features: boolean;
+    arms: Array<{ name: string; refit_every_days: number | null; description?: string }> | null;
+  };
+  coverage_target: number;
+  rolling_coverage_90: { window_days: number; dates: string[]; arms: Record<string, Array<number | null>> };
+  min_rolling_coverage_90: Record<string, { value: number; window_end: string }>;
+  periods: RegimePeriod[];
+}
+
+export interface DriftPoint {
+  target_day: string;
+  window: "validation" | "holdout";
+  coverage_90: number | null;
+  pinball: number | null;
+  rolling_coverage_90: number | null;
+  rolling_pinball_ratio: number | null;
+  coverage_alert: boolean;
+  pinball_alert: boolean;
+}
+
+export interface DriftEpisode {
+  signal: "coverage" | "pinball";
+  window: "validation" | "holdout";
+  start: string;
+  end: string;
+  days: number;
+  first_value: number;
+  extreme_value: number;
+  extreme_day: string;
+  open_at_end: boolean;
+}
+
+export interface DriftResponse {
+  experiment: string;
+  generated_utc: string | null;
+  model: string | null;
+  window: DriftWindow;
+  window_days: number;
+  holdout_start: string;
+  rule: string | null;
+  /** M2's last target day, the run's last day, and whether they agree. */
+  last_target_day: string | null;
+  run_last_day: string | null;
+  matches_run: boolean;
+  thresholds: { coverage: number; pinball_ratio: number; pinball_median?: number };
+  windows: Record<string, { days: number; coverage_alert_share?: number; pinball_alert_share?: number }>;
+  episodes: DriftEpisode[];
+  series: DriftPoint[];
+}
+
+/** observed: fixed rules over saved outputs; measured: drift monitor; simulated: failure injection. */
+export type Provenance = "observed" | "measured" | "simulated";
+
+export interface Incident {
+  incident_id: string;
+  delivery_day: string;
+  detected_utc: string;
+  type: IncidentType;
+  severity: "info" | "warning" | "critical";
+  detail: string;
+  action: string;
+  status: "resolved" | "review";
+  source: string;
+  metrics: Record<string, number>;
+  provenance: Provenance;
+  /** True when the day lies in the window its threshold was fitted on; null when not recorded. */
+  in_sample: boolean | null;
+}
+
+export interface IncidentsResponse {
+  generated_utc: string | null;
+  total: number;
+  limit: number;
+  offset: number;
+  counts: { type: Record<string, number>; source: Record<string, number>; provenance: Record<Provenance, number> };
+  source_provenance: Record<string, Provenance>;
+  incidents: Incident[];
+}
+
+export interface IncidentQuery {
+  type?: IncidentType;
+  source?: string;
+  limit: number;
+  offset?: number;
+}
+
+interface Unavailable {
+  available: false;
+  detail: string;
+}
+
+export interface Period {
+  first_day: string | null;
+  last_day: string | null;
+}
+
+export type OpsDeadline =
+  | Unavailable
+  | {
+      available: true;
+      source: string;
+      simulation: boolean;
+      generated_utc: string | null;
+      period: Period;
+      issue_local: string | null;
+      gate_local: string | null;
+      failure_rates: Record<string, number> | null;
+      seed: number | null;
+      /** Share of days each failure type was actually drawn; absent in older exports. */
+      realised_failure_rates?: Record<string, number> | null;
+      days: number;
+      on_time_share_with_chain: number;
+      on_time_share_without_chain: number;
+      fallback_days: number;
+      fallback_by_step: Record<string, number>;
+      latest_submission_minutes_after_issue: number;
+    };
+
+interface ObservedFallbacks {
+  observed: number | null;
+  observed_rule: string;
+  observed_period: Period;
+  observed_generated_utc: string | null;
+}
+
+export type OpsFallbacks =
+  | (Unavailable & ObservedFallbacks)
+  | ({
+      available: true;
+      simulated_days: number;
+      simulated_source: string;
+      simulated_period: Period;
+      simulated_generated_utc: string | null;
+    } & ObservedFallbacks);
+
+export interface DriftSignalNow {
+  value: number | null;
+  threshold: number;
+  alert: boolean;
+}
+
+export type OpsDrift =
+  | Unavailable
+  | {
+      available: true;
+      source: string;
+      generated_utc: string | null;
+      as_of: string;
+      window: "validation" | "holdout";
+      window_days: number;
+      holdout_start: string;
+      holdout_days: number;
+      last_target_day: string | null;
+      run_last_day: string | null;
+      matches_run: boolean;
+      coverage: DriftSignalNow;
+      pinball_ratio: DriftSignalNow;
+    };
+
+export interface OpsResponse {
+  run_id: string;
+  deadline: OpsDeadline;
+  fallbacks: OpsFallbacks;
+  drift: OpsDrift;
+}
+
+// ------------------------------------------------------------------------------
 // Transport
 // ------------------------------------------------------------------------------
 
@@ -202,8 +401,15 @@ type Params = Record<string, string | number | undefined>;
 // The API serves read-only artifacts, so an identical GET returns the same body.
 // Successful responses are kept in memory, keyed by URL, so switching tabs does
 // not refetch. Errors are never cached; the oldest entry is evicted first.
+// Model health responses are not cached: a health export can be rerun while the
+// page is open, and the next visit to the tab should show it without a reload.
 const CACHE_LIMIT = 200;
+const UNCACHED_PREFIXES = ["/api/model-health/"];
 const responseCache = new Map<string, unknown>();
+
+function cacheable(path: string): boolean {
+  return !UNCACHED_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
 
 function remember(url: string, body: unknown): void {
   responseCache.delete(url);
@@ -242,7 +448,8 @@ async function getJson<T>(path: string, params: Params, signal: AbortSignal): Pr
   }
   const qs = query.toString();
   const url = qs ? `${path}?${qs}` : path;
-  if (responseCache.has(url)) {
+  const cached = cacheable(path);
+  if (cached && responseCache.has(url)) {
     const hit = responseCache.get(url);
     remember(url, hit);
     return hit as T;
@@ -262,7 +469,7 @@ async function getJson<T>(path: string, params: Params, signal: AbortSignal): Pr
     throw new ApiError(response.status, message);
   }
   const body = (await response.json()) as T;
-  remember(url, body);
+  if (cached) remember(url, body);
   return body;
 }
 
@@ -305,4 +512,18 @@ export const api = {
 
   featureImportance: (run: string, signal: AbortSignal) =>
     getJson<FeatureImportanceResponse>("/api/feature-importance", { run }, signal),
+
+  regime: (run: string, signal: AbortSignal) => getJson<RegimeResponse>("/api/model-health/regime", { run }, signal),
+
+  drift: (run: string, windowKey: DriftWindow, signal: AbortSignal) =>
+    getJson<DriftResponse>("/api/model-health/drift", { run, window: windowKey }, signal),
+
+  incidents: (run: string, query: IncidentQuery, signal: AbortSignal) =>
+    getJson<IncidentsResponse>(
+      "/api/model-health/incidents",
+      { run, type: query.type, source: query.source, limit: query.limit, offset: query.offset },
+      signal,
+    ),
+
+  ops: (run: string, signal: AbortSignal) => getJson<OpsResponse>("/api/model-health/ops", { run }, signal),
 };

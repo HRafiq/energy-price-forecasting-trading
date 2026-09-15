@@ -3,6 +3,8 @@
     uv run uvicorn api.main:app --port 8000
 
 Every endpoint lives under ``/api``; the contract is in ``docs/dashboard_api.md``.
+The Model health tab reads ``/api/model-health/*``, over ``api.health``;
+``/api/health`` stays the service status.
 When ``frontend/dist`` exists, the built React app is served at ``/``.
 """
 
@@ -18,6 +20,7 @@ from typing import Annotated, Any, Literal, TypeVar
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 
+from api import health as model_health
 from api import service
 from src.config import REPO_ROOT, load_settings
 
@@ -52,6 +55,7 @@ Duration = Annotated[int, Query(ge=1, le=4)]
 Degradation = Annotated[int, Query(ge=0, le=25)]
 StrategyQuery = Annotated[StrategyKey, Query()]
 Power = Annotated[float, Query(ge=0.5, le=5.0)]
+DriftWindow = Literal["validation", "holdout", "all"]
 
 
 def _call(function: Callable[[], T]) -> T:
@@ -180,6 +184,73 @@ def error_analysis(
 @app.get("/api/feature-importance")
 def feature_importance(root: Root, run: str | None = None) -> dict[str, Any]:
     return _run(root, run).feature_importance
+
+
+def _health(root: Path, run_id: str | None) -> model_health.Health:
+    def load() -> model_health.Health:
+        if run_id is not None and run_id not in service.list_run_ids(root):
+            raise HTTPException(status_code=404, detail=f"run {run_id!r} not found")
+        return model_health.load_health(root, run_id or service.latest_run_id(root))
+
+    return _call(load)
+
+
+def _optional_day(text: str | None) -> date | None:
+    return None if text is None else _day(text)
+
+
+@app.get("/api/model-health/regime")
+def model_health_regime(root: Root, run: str | None = None) -> dict[str, Any]:
+    loaded = _health(root, run)
+    return _call(lambda: model_health.regime(loaded))
+
+
+@app.get("/api/model-health/drift")
+def model_health_drift(
+    root: Root,
+    run: str | None = None,
+    window: Annotated[DriftWindow, Query()] = "all",
+) -> dict[str, Any]:
+    loaded = _health(root, run)
+    return _call(lambda: model_health.drift(loaded, window))
+
+
+@app.get("/api/model-health/incidents")
+def model_health_incidents(
+    root: Root,
+    run: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    incident_type: Annotated[list[str] | None, Query(alias="type")] = None,
+    source: Annotated[list[str] | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=model_health.MAX_LIMIT)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> dict[str, Any]:
+    # A malformed query is refused (422) before the run's files are looked up (503).
+    first, last = _optional_day(start), _optional_day(end)
+    _call(
+        lambda: model_health.check_incident_query(
+            first, last, incident_type, source, limit, offset
+        )
+    )
+    loaded = _health(root, run)
+    return _call(
+        lambda: model_health.incidents(
+            loaded,
+            start=first,
+            end=last,
+            types=incident_type,
+            sources=source,
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+@app.get("/api/model-health/ops")
+def model_health_ops(root: Root, run: str | None = None) -> dict[str, Any]:
+    loaded = _health(root, run)
+    return _call(lambda: model_health.ops(loaded))
 
 
 if FRONTEND.exists():
