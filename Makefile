@@ -1,8 +1,9 @@
 # Short names for the pipeline commands in the README. `make help` lists them.
 UV := uv run
+MLFLOW_PORT ?= 5001
 SUITES := validation decision-value synthetic degradation attribution
 
-.PHONY: help setup data entsoe forecast backtest holdout report figures export api web dashboard health experiments test
+.PHONY: help setup data entsoe forecast backtest holdout report figures export api web dashboard health experiments mlflow test
 
 help:
 	@echo "setup     install dependencies with uv"
@@ -19,6 +20,7 @@ help:
 	@echo "dashboard build the React app and serve it with the API on port 8000"
 	@echo "health    drift monitor (M2) and incident log from saved forecasts"
 	@echo "experiments Phase 6 failure experiments: M1, D1, D5, then M2"
+	@echo "mlflow    MLflow UI for the experiment runs at http://127.0.0.1:$(MLFLOW_PORT)"
 	@echo "test      lint, type checks and tests"
 
 setup:
@@ -77,6 +79,9 @@ experiments:
 	$(UV) python -m src.health.experiments.d1_missing_weather
 	$(UV) python -m src.health.experiments.d5_deadline
 	$(MAKE) health
+
+mlflow:
+	$(UV) mlflow ui --backend-store-uri sqlite:///mlflow.db --port $(MLFLOW_PORT)
 
 test:
 	$(UV) ruff check .
