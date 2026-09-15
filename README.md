@@ -140,6 +140,7 @@ make figures    # README figures
 make export     # dashboard artifacts, including the P&L grid for 104 battery settings
 make experiments # Phase 6 failure experiments: regime shift, missing weather, deadline, drift
 make health     # drift monitor and incident log from saved forecasts
+make mlflow     # browse the recorded experiment runs at http://127.0.0.1:5001
 make dashboard  # build the React app and serve it with the API at http://127.0.0.1:8000
 make test       # ruff, strict mypy, pytest
 ```
