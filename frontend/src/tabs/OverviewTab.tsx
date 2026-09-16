@@ -43,7 +43,7 @@ export function OverviewTab({ run, date, battery, forecast }: OverviewTabProps) 
         busy={isReloading(forecast)}
         sub={
           fc
-            ? `Quantile fan issued ${clock(fc.issued_local)} before the ${clock(fc.gate_local)} gate · 90% band q0.05 to q0.95, 50% band q0.25 to q0.75, median line · dashed white line is the realised price (€/MWh)`
+            ? `Quantile fan issued ${clock(fc.issued_local)} before the ${clock(fc.gate_local)} gate · 90% band q0.05 to q0.95, 50% band q0.25 to q0.75, median line · dashed black line is the realised price (€/MWh)`
             : "Quantile fan with the realised price"
         }
       >

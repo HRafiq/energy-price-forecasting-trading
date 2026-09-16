@@ -12,13 +12,13 @@ import {
 import type { DriftEpisode, DriftResponse } from "../../api";
 import { longDay, monthYear, num, pct, pctPoints, shortDay } from "../../format";
 import { useNarrow } from "../../hooks";
-import { C, healthAxisTick as axisTick, tooltipLabelStyle, tooltipStyle } from "../../theme";
+import { C, healthAxisTick as axisTick, tooltipLabelStyle, tooltipStyle, withAlpha } from "../../theme";
 
 // Two stacked charts, one y-scale each, sharing the delivery day on x.
 const AXIS_WIDTH = 44;
 const MARGIN = { top: 8, right: 8, left: 0, bottom: 0 };
 const SYNC_ID = "drift-monitor";
-const ALERT_FILL = "rgba(224, 104, 92, 0.16)";
+const ALERT_FILL = withAlpha(C.neg, 0.14);
 
 interface Row {
   date: string;

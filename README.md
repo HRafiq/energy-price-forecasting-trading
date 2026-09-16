@@ -6,7 +6,7 @@ A probabilistic price forecaster feeding a battery dispatch optimiser, backteste
 
 ![Battery trading dashboard on the last hold-out day](docs/img/dashboard.png)
 
-*My dashboard on 14 September 2026, the last hold-out day: the forecast issued at 11:40 the day before topped out at €198/MWh and missed the €740/MWh evening peak, yet the schedule solved for a 1 MW / 2 MWh battery earned €964, 93.3% of the €1,034 perfect foresight made. Every control reads backtest results for 835 days.*
+*My dashboard on 14 September 2026, the last hold-out day: the forecast issued at 11:40 the day before topped out at €198/MWh and missed the €740/MWh evening peak, yet the schedule solved for a 1 MW / 2 MWh battery earned €964, 93.3% of the €1,034 perfect foresight made. Every control reads backtest results for 835 days. The panel above the chart is the desk briefing, written from the same numbers the page shows.*
 
 ## What's in the system
 
@@ -41,6 +41,10 @@ Validation window, June 2024 to May 2026, 70,080 quarter-hours.
 
 The production model is close to calibrated with slightly narrow tails: its 90% range covered 85.6% of prices, against 73.3% for raw LightGBM quantile. It is weakest on extremes: pinball loss rises to 8.20 on days above €200/MWh, and its range did not reach the -€500/MWh floor on 1 May 2026.
 
+![The Forecast tab of the dashboard](docs/img/forecast_tab.png)
+
+*The Forecast tab: calibration against the diagonal, error and money at stake by delivery hour, and what the model leans on. Over the 29 traded days to 14 September 2026 the 50% band held 31.7% of prices, the 80% band 56.8% and the 90% band 67.4%, so the ranges ran narrow at the end of the hold-out. Yesterday's price for the same quarter-hour carries 17.5% of the model's gain.*
+
 ### Trading performance
 
 1 MW / 2 MWh, 90% round trip, €8 wear per MWh discharged, at most two cycles a day. Schedules are committed before the 12:00 gate and settled at the realised price.
@@ -56,6 +60,10 @@ The production model is close to calibrated with slightly narrow tails: its 90% 
 ![Forecast fan and battery schedule for one backtest day](docs/img/example_day.png)
 
 *One validation day: the quantile forecast issued at 11:40 the day before, and the schedule the optimiser committed before the 12:00 gate.*
+
+![The Trading tab of the dashboard](docs/img/trading_tab.png)
+
+*The Trading tab: profit against the perfect-foresight ceiling, and where the forecast error cost money. Over the last 29 traded days the battery earned €8,755 of the €9,775 available, 89.6%, with no drawdown. Under-forecasting the 18:00 to 20:00 block cost €1,029, more than the whole €1,019 gap to perfect foresight, because the other blocks handed some of it back.*
 
 I froze every choice on the validation window before trading the hold-out, 1 June to 14 September 2026, once. Against the same summer months of validation, 94.3%, the hold-out came in 3.4 points lower.
 
@@ -127,11 +135,12 @@ with `make airflow`.
 
 ## Limitations
 
-- Day-ahead only: no intraday re-trading and no balancing or reserve revenue.
-- One 1 MW battery as a price taker, with fixed-volume orders filled at the clearing price; no fleet, grid or market-impact effects.
-- Wear is a flat €8 per MWh discharged with a two-cycle cap, not a cell-ageing model, and each day starts and ends half full.
-- Outages sit outside the headline numbers. Settled at the German imbalance price, a random two-hour outage costs €44 on average, the worst window of a day €277.
-- The hold-out is 105 summer days and public data has gaps. Failure rates in the deadline simulation are assumptions, not measured outages.
+- **Day-ahead only:** no intraday re-trading and no balancing or reserve revenue. I looked into adding the intraday leg honestly and stopped: neither SMARD nor the ENTSO-E Transparency Platform publishes a free DE-LU intraday index at quarter-hour resolution. SMARD's wholesale category is day-ahead prices for each bidding zone, and ENTSO-E's A44 returns the two day-ahead auctions, SDAC and the EXAA 10:15 auction, whatever contract or auction parameters I asked for. Simulating intraday without those prices would have meant inventing them.
+- **Price taker (T5):** one 1 MW battery with fixed-volume orders filled at the clearing price; no fleet, grid or market-impact effects.
+- **Wear is a flat €8 per MWh discharged** with a two-cycle cap, not a cell-ageing model, and each day starts and ends half full.
+- **Outages sit outside the headline numbers (T4).** Settled at the German imbalance price, a random two-hour outage costs €44 on average, the worst window of a day €277.
+- **The hold-out is 105 summer days (T6)** and public data has gaps. Failure rates in the deadline simulation are assumptions, not measured outages.
+- **The desk briefing is checked, not understood.** Every figure it writes must appear in the payload the page was built from, and prose that fails is thrown away before it is shown. What the check cannot tell is whether a figure that is in the payload is being used in the right role.
 - Not a trading recommendation.
 
 A production system would add intraday re-optimisation and bid curves on top of what

@@ -129,9 +129,8 @@ function Shell({ context, note, runKind, holdout, tab, onTab, runId, children }:
             <Pill
               label={runKind === "live" ? "live · today's run" : "backtest · historical data"}
               color={C.good}
-              rgb="121,195,152"
             />
-            {holdout ? <Pill label="hold-out" color={C.warn} rgb="232,161,60" /> : null}
+            {holdout ? <Pill label="hold-out" color={C.warn} /> : null}
           </span>
         </header>
 

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, type BatteryQuery, type NarrateRequest, type NarrateResponse, type NarrateTab, type WindowKey } from "../api";
 import { useApi } from "../hooks";
-import { C } from "../theme";
+import { C, withAlpha } from "../theme";
 
 /** The questions offered before the first briefing comes back and names its own. */
 const DEFAULT_FOLLOW_UPS: Record<string, string> = {
@@ -97,9 +97,9 @@ export function DeskBriefing({ tab, run, date = null, windowKey, battery }: Desk
               title={active ? "Back to the briefing" : label}
               className="text-xs rounded-full px-3 py-1"
               style={{
-                background: active ? "rgba(79,143,197,0.22)" : "rgba(79,143,197,0.08)",
-                color: "#9dc3e2",
-                border: `1px solid rgba(79,143,197,${active ? 0.6 : 0.25})`,
+                background: withAlpha(C.bandLine, active ? 0.18 : 0.08),
+                color: C.narrText,
+                border: `1px solid ${withAlpha(C.bandLine, active ? 0.55 : 0.25)}`,
                 opacity: run ? 1 : 0.5,
                 cursor: run ? "pointer" : "default",
               }}
