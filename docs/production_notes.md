@@ -536,3 +536,65 @@ and writes a critical pipeline incident when the schedule was committed late.
 **In my words:** _to write_
 
 ---
+
+## M5 · Narration that invents a number (Phase 8: enforced)
+
+**What breaks:** a language model asked to describe a trading day will write a figure
+that reads plausibly and is in no dataset. On a desk that figure is worse than no
+briefing at all, because it arrives in the same sentence as the true ones and carries
+their authority. The rule this project was built on is that the deterministic core
+produces every number and the model only narrates, so the question is not whether to
+trust the model but how the rule is enforced when it does not hold.
+
+**How it is enforced:** the model never sees the run. It is given one payload per tab,
+assembled from the same API functions the page itself calls, and is told that every
+number it writes must appear there. The prose that comes back is then read for
+numbers and each one is looked up in that payload, allowing for thousands separators,
+rounding, and a share written as a percentage. A briefing carrying a figure that is
+not there is discarded: the API answers with a deterministic writer over the same
+payload, names the rejected figures in `rejected`, and sets `fell_back`. The same
+happens when the model cannot be reached, so a briefing always arrives and nothing
+that fails the check is returned.
+
+**Measured:** the four payloads are 954, 1,154, 647 and 2,783 bytes, holding
+16, 23, 11 and 28 distinct numbers. The briefings written from them state
+7, 9, 6 and 9 figures, and every one is found. A payload of that size is small
+enough to send whole and to check a sentence against, which is the reason the
+briefing is scoped to one tab and one day rather than to the run.
+
+**What the check cannot catch:** it verifies the prose against the payload, not the
+payload against the page. The capture ratio first arrived rounded to two places, so
+0.8957 reached the model as 0.9 and the briefing wrote 90% under a Trading tab
+showing 89.6%. The check passed it, correctly: the prose matched what it was given.
+Shares are now carried to four places, judged by the value rather than the name of
+the key, so a share added later cannot bring the fault back. Rounding itself stays
+allowed, which is a deliberate limit: 0.8957 supports 89.57%, 89.6% and 90%, though
+not 89%. Grounding moves the trust from the model to the payload assembly, where it
+can be tested, rather than removing it.
+
+**What review caught, twice:** the first version of the check allowed any whole
+number within one of a payload figure and mined digits out of strings. Against the
+real export it accepted "charged over 20 periods" where the data says 19, "965 EUR"
+where it says 964.46, and a loss of -14 EUR that existed only as the tail of the date
+2026-09-14. The repair opened two more holes, which a second review found: labels
+were blanked by plain substring replacement, so "11-14%" and "200:000" swallowed
+their own digits and left nothing to check, and a percentage was matched against any
+payload number, so "29%" passed because 29 was the traded-day count.
+
+What holds now is narrower. Rounding, half up or half to even, is the only latitude.
+Only a clock time or a date the payload holds may be quoted, and only as a whole
+token. A percentage must come from a share. A figure that cannot be valued, spelled
+out in words or written "½", counts as unsupported rather than being passed over.
+Both rounds of exploits are pinned by tests, so a repair that reopens either fails
+the suite rather than the dashboard.
+
+**The limit worth stating plainly:** the check asks whether a figure is in the
+payload, not whether it is in the right place. The battery runs 2 hours and cycles
+1.71 times a day, and a briefing claiming it "cycled 2 times a day" passes, because 2
+is in the payload as the duration. Catching that would mean tying each sentence to
+the key it describes, which this does not attempt. What it does catch is the figure
+that exists nowhere in the data, which is the one that cannot be argued with.
+
+**Without a key:** `OPENAI_API_KEY` is optional. With no key the deterministic writer
+answers every request, which is what the test suite runs against, so the grounding
+path and the fallback are exercised on every run with no network and no spend.

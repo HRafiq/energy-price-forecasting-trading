@@ -485,6 +485,63 @@ async function getJson<T>(path: string, params: Params, signal: AbortSignal): Pr
   return body;
 }
 
+/** The one write in the API: the briefing is composed per request, so nothing is cached. */
+async function postJson<T>(path: string, body: unknown, signal: AbortSignal): Promise<T> {
+  const response = await fetch(path, {
+    method: "POST",
+    signal,
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`.trim();
+    try {
+      const text = detailText(await response.json());
+      if (text) message = text;
+    } catch {
+      // Body was not JSON; keep the status line.
+    }
+    throw new ApiError(response.status, message);
+  }
+  return (await response.json()) as T;
+}
+
+/** The tabs a briefing can be written about, as the API names them. */
+export type NarrateTab = "overview" | "forecast" | "trading" | "model_health";
+
+export interface NarrateRequest {
+  tab: NarrateTab;
+  /** The delivery day; omitted on tabs that show a window rather than a day. */
+  date?: string;
+  window?: WindowKey;
+  run?: string;
+  duration?: number;
+  degradation?: number;
+  strategy?: StrategyKey;
+  power?: number;
+  question?: string;
+}
+
+export interface NarrateResponse {
+  tab: NarrateTab;
+  day: string;
+  window: WindowKey;
+  text: string;
+  /** "openai" when a key is configured, "template" otherwise or after a fallback. */
+  provider: string;
+  model: string | null;
+  /** Every figure in `text` was found in the payload the briefing was given. */
+  grounded: boolean;
+  unsupported: string[];
+  /** A model wrote prose with a figure that was not in the payload, so it was dropped. */
+  fell_back: boolean;
+  /** The figures a model wrote that are not in the payload; empty if it never answered. */
+  rejected: string[];
+  /** Why the deterministic writer answered, or null when the first attempt stood. */
+  fallback_reason: string | null;
+  follow_ups: Record<string, string>;
+}
+
 function batteryParams(b: BatteryQuery): Params {
   return { duration: b.duration, degradation: b.degradation, strategy: b.strategy, power: b.power };
 }
@@ -538,4 +595,7 @@ export const api = {
     ),
 
   ops: (run: string, signal: AbortSignal) => getJson<OpsResponse>("/api/model-health/ops", { run }, signal),
+
+  narrate: (request: NarrateRequest, signal: AbortSignal) =>
+    postJson<NarrateResponse>("/api/narrate", request, signal),
 };

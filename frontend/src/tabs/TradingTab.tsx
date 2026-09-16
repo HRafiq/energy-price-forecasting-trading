@@ -48,7 +48,7 @@ export function TradingTab({
 
   return (
     <div className="space-y-4">
-      <DeskBriefing />
+      <DeskBriefing tab="trading" run={run} windowKey={windowKey} battery={battery} />
       <Panel title="Cumulative P&L by strategy" busy={isReloading(pnl)} sub={pnlSub(dataOf(pnl))}>
         {pnl.status === "error" && gridAvailable === false ? (
           <StatusMessage height={260}>

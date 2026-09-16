@@ -7,7 +7,8 @@ calibration, error by hour) are aggregated from the exported forecasts on each
 request. The one thing solved on request is a single day's schedule for the chosen
 battery, with the same optimizer the backtest used.
 
-Start it with `make api` (port 8000). All endpoints are `GET` and return JSON.
+Start it with `make api` (port 8000). Every endpoint returns JSON, and every one
+is a `GET` apart from `POST /api/narrate`, which writes the desk briefing.
 
 ## Common query parameters
 
@@ -313,3 +314,69 @@ yet"`); `fallbacks` then still carries the observed count.
            "coverage": {"value": 0.674851, "threshold": 0.74, "alert": true},
            "pinball_ratio": {"value": 1.937204, "threshold": 1.5, "alert": true}}}
 ```
+
+## Desk briefing
+
+### `POST /api/narrate`
+
+Writes three to five sentences about one tab, for the day and battery the page is
+showing. The body carries the same values the other endpoints take as query
+parameters, plus the tab and an optional follow-up question. Only the overview tab
+is about a single day; the others show a window, so `date` may be left out and the
+run's last day is used:
+
+```json
+{"tab": "overview", "date": "2026-09-14", "window": "last30", "run": null,
+ "power": 1, "duration": 2, "degradation": 8, "strategy": "median",
+ "question": "What changed vs yesterday?"}
+```
+
+```json
+{"tab": "overview", "day": "2026-09-14", "window": "last30",
+ "text": "On 2026-09-14 the price ran from 152 EUR/MWh at 16:00 to 740.01 at 19:45. ...",
+ "provider": "template", "model": null, "grounded": true,
+ "unsupported": [], "fell_back": false, "rejected": [], "fallback_reason": null,
+ "follow_ups": {"why_this_dispatch": "Why this dispatch?",
+                "what_changed": "What changed vs yesterday?",
+                "explain_the_miss": "Explain the miss"}}
+```
+
+The briefing may state only numbers the deterministic core already produced. The
+model is given a payload built from these same endpoints and nothing else, and every
+figure it writes is looked up in that payload afterwards. Prose carrying a figure
+that is not there is thrown away: `rejected` names the figures that failed,
+`fallback_reason` says why the draft was dropped, the deterministic writer answers
+instead, and `fell_back` is `true`. When the model cannot be reached, `rejected` is
+empty and `fallback_reason` carries the error, so the endpoint always returns a
+briefing.
+
+Rounding is the only latitude the check gives. A payload holding 0.8957 supports
+"89.57%", "89.6%" and "90%", but not "89%"; 964.46 supports "964" but not "965"; and
+a count of 19 supports only "19". A percentage must come from a share, so 29 traded
+days does not support "29% of perfect foresight". A clock time or a date the payload
+holds may be quoted as written and is not read for numbers, but only as a whole
+token: the "00:00" inside "200:000" is part of a figure and is checked as one. A
+figure the check cannot value, spelled out in words or written in a numeral such as
+"½", counts as unsupported rather than being passed over.
+
+What it does not check is which key a sentence is talking about. A number that is in
+the payload in another role is accepted: a 2 hour battery cycling 1.71 times a day
+supports the sentence "it cycled 2 times a day", because 2 is in the payload. The
+check catches figures that exist nowhere in the data, which is the failure that
+matters here.
+
+`question` is echoed back inside the answer, so its figures are stripped before it is
+used, in digits and in words alike: a figure typed into the question does not appear
+in the briefing as though the data held it.
+
+`provider` says who wrote the returned text: `openai` when `OPENAI_API_KEY` is set in
+the gitignored `.env`, and `template` otherwise or after a fallback. `grounded`
+describes the text actually returned. It is `true` in every response the endpoint
+produces, because prose that fails the check is replaced rather than returned; read
+`fell_back` and `fallback_reason` to see whether that happened.
+
+| Status | When |
+|---|---|
+| 422 | A tab other than `overview`, `forecast`, `trading`, `model_health`, or a battery value outside the grid |
+| 404 | An unknown run, or a well-formed date the run has no forecast for |
+| 503 | The P&L grid or health export the tab needs has not been written yet |

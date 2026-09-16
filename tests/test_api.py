@@ -18,6 +18,8 @@ from api.main import app
 from src.config import Settings
 from src.export.artifacts import build_manifest
 from src.health.incidents import Incident, IncidentType, make_incident_id
+from src.narration import provider as narration_provider
+from src.narration.provider import Briefing, NarrationError
 from src.trading.optimizer import DispatchError
 from tests.test_trading import day_frame
 
@@ -739,3 +741,247 @@ def test_a_bad_incident_query_is_refused_before_the_missing_export(
     response = client.get("/api/model-health/incidents", params=params)
     assert response.status_code == 422, response.json()
     assert client.get("/api/model-health/incidents").status_code == 503
+
+
+class _Liar:
+    """A provider that writes a figure the payload does not contain."""
+
+    name = "openai"
+
+    def write(
+        self, payload: dict[str, object], question: str | None = None
+    ) -> Briefing:
+        return Briefing(
+            "The battery earned 4,242.42 EUR on the evening block.",
+            "openai",
+            "gpt-4o-mini",
+        )
+
+
+class _Unreachable:
+    """A provider whose call fails."""
+
+    name = "openai"
+
+    def write(
+        self, payload: dict[str, object], question: str | None = None
+    ) -> Briefing:
+        raise NarrationError("the model returned an empty briefing")
+
+
+def test_narrate_writes_a_briefing_about_the_page_the_operator_is_on(
+    client: TestClient, settings: Settings
+) -> None:
+    days, _ = _days(settings)
+    body = client.post(
+        "/api/narrate", json={"tab": "overview", "date": str(days[0])}
+    ).json()
+
+    assert body["provider"] == "template" and body["model"] is None
+    assert (
+        body["grounded"] is True
+        and body["fell_back"] is False
+        and body["rejected"] == []
+        and body["fallback_reason"] is None
+    )
+    assert body["unsupported"] == [] and str(days[0]) in body["text"]
+    assert body["tab"] == "overview" and body["day"] == str(days[0])
+    assert set(body["follow_ups"]) == {
+        "why_this_dispatch",
+        "what_changed",
+        "explain_the_miss",
+    }
+
+
+def test_narrate_reads_the_trading_window_and_answers_a_follow_up(
+    client: TestClient, settings: Settings
+) -> None:
+    days, _ = _days(settings)
+    body = client.post(
+        "/api/narrate",
+        json={
+            "tab": "trading",
+            "date": str(days[0]),
+            "window": "all",
+            "question": "Why this dispatch?",
+        },
+    ).json()
+
+    assert body["grounded"] is True and body["fell_back"] is False
+    # Three traded days at 80 EUR a day for the 2 h battery, against 100 perfect.
+    assert "480 EUR, 80% of the 600 EUR" in body["text"]
+    assert "cycling once a day" in body["text"]
+    assert "why this dispatch" in body["text"].lower()
+
+
+def test_narrate_compares_the_day_with_the_one_before_it(
+    client: TestClient, settings: Settings
+) -> None:
+    days, _ = _days(settings)
+    body = client.post(
+        "/api/narrate",
+        json={
+            "tab": "overview",
+            "date": str(days[1]),
+            "question": "What changed vs yesterday?",
+        },
+    ).json()
+
+    assert f"on {days[0]} it earned" in body["text"] and body["grounded"] is True
+
+    # The day after the untraded one steps over it to the last day actually traded.
+    stepped = client.post(
+        "/api/narrate",
+        json={
+            "tab": "overview",
+            "date": str(days[3]),
+            "question": "What changed vs yesterday?",
+        },
+    ).json()
+    assert f"on {days[1]} it earned" in stepped["text"]
+    assert stepped["grounded"] is True
+
+    # The first day of the run has no day before it, so nothing is compared.
+    first = client.post(
+        "/api/narrate",
+        json={
+            "tab": "overview",
+            "date": str(days[0]),
+            "question": "What changed vs yesterday?",
+        },
+    ).json()
+    assert "the payload holds only the figures above" in first["text"]
+
+
+def test_narrate_takes_the_runs_last_day_when_a_tab_shows_a_window(
+    client: TestClient,
+) -> None:
+    (run,) = client.get("/api/runs").json()
+    body = client.post("/api/narrate", json={"tab": "trading", "window": "all"}).json()
+
+    assert body["day"] == run["last_day"] and body["grounded"] is True
+
+
+def test_narrate_refuses_a_tab_the_dashboard_does_not_have(
+    client: TestClient, settings: Settings
+) -> None:
+    days, _ = _days(settings)
+
+    assert (
+        client.post(
+            "/api/narrate", json={"tab": "pnl", "date": str(days[0])}
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/api/narrate", json={"tab": "overview", "date": "2020-01-01"}
+        ).status_code
+        == 404
+    )
+
+
+def test_narrate_never_lets_a_question_put_a_figure_in_the_briefing(
+    client: TestClient, settings: Settings
+) -> None:
+    days, _ = _days(settings)
+    body = client.post(
+        "/api/narrate",
+        json={
+            "tab": "overview",
+            "date": str(days[0]),
+            "question": "Why did it only earn 4242 EUR on 31 August?",
+        },
+    ).json()
+
+    # The answer echoes the question, so a figure typed into it would read as one
+    # of the day's own. The digits do not survive the trip.
+    assert "4242" not in body["text"] and "31" not in body["text"]
+    assert body["grounded"] is True and body["unsupported"] == []
+
+
+def test_narrate_takes_a_spelled_out_figure_out_of_a_question(
+    client: TestClient, settings: Settings
+) -> None:
+    days, _ = _days(settings)
+    body = client.post(
+        "/api/narrate",
+        json={
+            "tab": "overview",
+            "date": str(days[0]),
+            "question": "Why did it earn four thousand euros?",
+        },
+    ).json()
+
+    # Digits are not the only way to write a figure into a question.
+    assert "thousand" not in body["text"] and "four" not in body["text"]
+    assert body["grounded"] is True
+
+
+def test_narrate_refuses_a_battery_outside_the_grid(
+    client: TestClient, settings: Settings
+) -> None:
+    days, _ = _days(settings)
+    refused = client.post(
+        "/api/narrate", json={"tab": "overview", "date": str(days[0]), "power": 0.7}
+    )
+
+    assert refused.status_code == 422
+
+
+def test_narrate_says_what_to_export_when_model_health_has_no_export(
+    client: TestClient, settings: Settings
+) -> None:
+    days, _ = _days(settings)
+    refused = client.post(
+        "/api/narrate", json={"tab": "model_health", "date": str(days[0])}
+    )
+
+    assert refused.status_code == 503
+    assert "--steps health" in refused.json()["detail"]
+
+
+def test_narrate_briefs_model_health_once_the_export_is_there(
+    health_client: TestClient, settings: Settings
+) -> None:
+    days, _ = _days(settings)
+    body = health_client.post(
+        "/api/narrate", json={"tab": "model_health", "date": str(days[0])}
+    ).json()
+
+    assert body["grounded"] is True and "coverage" in body["text"].lower()
+
+
+def test_narrate_throws_away_prose_that_invents_a_figure(
+    client: TestClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    days, _ = _days(settings)
+    monkeypatch.setattr(narration_provider, "build_provider", lambda *a, **k: _Liar())
+
+    body = client.post(
+        "/api/narrate", json={"tab": "overview", "date": str(days[0])}
+    ).json()
+
+    # The invented figure is named, and the deterministic writer answers instead.
+    assert body["rejected"] == ["4,242.42"] and body["fell_back"] is True
+    assert "figures this page does not show" in body["fallback_reason"]
+    assert body["provider"] == "template" and body["grounded"] is True
+    assert "4,242.42" not in body["text"]
+
+
+def test_narrate_falls_back_when_the_model_cannot_be_reached(
+    client: TestClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    days, _ = _days(settings)
+    monkeypatch.setattr(
+        narration_provider, "build_provider", lambda *a, **k: _Unreachable()
+    )
+
+    body = client.post(
+        "/api/narrate", json={"tab": "overview", "date": str(days[0])}
+    ).json()
+
+    assert body["fell_back"] is True and body["provider"] == "template"
+    # Nothing was rejected: the model never answered, which is a different note.
+    assert body["grounded"] is True and body["rejected"] == []
+    assert "empty briefing" in body["fallback_reason"]

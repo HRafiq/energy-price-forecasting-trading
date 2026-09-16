@@ -19,10 +19,14 @@ from typing import Annotated, Any, Literal, TypeVar
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, Field
 
 from api import health as model_health
 from api import service
 from src.config import REPO_ROOT, load_settings
+from src.narration import grounding
+from src.narration import payload as narration_payload
+from src.narration import provider as narration_provider
 
 __all__ = ["app", "dashboard_root"]
 
@@ -252,6 +256,109 @@ def model_health_incidents(
 def model_health_ops(root: Root, run: str | None = None) -> dict[str, Any]:
     loaded = _health(root, run)
     return _call(lambda: model_health.ops(loaded))
+
+
+class NarrateRequest(BaseModel):
+    """What to write a briefing about: one tab, one day, one battery."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tab: Literal["overview", "forecast", "trading", "model_health"] = "overview"
+    #: The delivery day. Only the overview tab is about one day; the others show a
+    #: window, so they may leave it out and take the run's last day.
+    date: str | None = None
+    window: WindowKey = "last30"
+    run: str | None = None
+    power: float = Field(default=1.0, ge=0.5, le=5.0)
+    duration: int = Field(default=2, ge=1, le=4)
+    degradation: int = Field(default=8, ge=0, le=25)
+    strategy: StrategyKey = "median"
+    question: str | None = Field(default=None, max_length=200)
+
+
+def _plain_question(question: str | None) -> str | None:
+    """A follow-up with its figures removed.
+
+    The question is echoed back inside the answer, so a figure in the question
+    would otherwise appear in the briefing as though the data held it. The three
+    canned follow-ups carry no numbers; anything typed loses its, whether written
+    in digits or in words.
+    """
+    if not question:
+        return None
+    return grounding.strip_numerals(question) or None
+
+
+@app.post("/api/narrate")
+def narrate(request: NarrateRequest, root: Root) -> dict[str, Any]:
+    """A briefing for one tab, carrying only numbers the payload already holds.
+
+    The model writes it and the grounding check judges it: prose that states a
+    figure the payload does not contain is thrown away and the deterministic
+    writer answers instead, with the rejected figures in the response. What is
+    returned is always grounded, so the dashboard can show it unread.
+    """
+    loaded = _run(root, request.run)
+    health = _health(root, request.run) if request.tab == "model_health" else None
+    day = _day(request.date or str(loaded.manifest["last_day"]))
+    battery = {
+        "power_mw": request.power,
+        "duration_h": request.duration,
+        "degradation_eur_per_mwh": request.degradation,
+        "strategy": request.strategy,
+    }
+
+    def build() -> dict[str, Any]:
+        try:
+            return narration_payload.build_payload(
+                loaded,
+                health,
+                tab=request.tab,
+                day=day,
+                window=request.window,
+                battery=battery,
+            )
+        except narration_payload.PayloadError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    payload = _call(build)
+    question = _plain_question(request.question)
+    provider = narration_provider.build_provider()
+    rejected: list[str] = []
+    reason: str | None = None
+    briefing: narration_provider.Briefing | None = None
+    report: grounding.GroundingReport | None = None
+    try:
+        written = provider.write(payload, question)
+        checked = grounding.check_grounding(written.text, payload)
+        if checked.grounded:
+            briefing, report = written, checked
+        else:
+            rejected = [claim.text for claim in checked.unsupported]
+            reason = "the briefing stated figures this page does not show"
+    except narration_provider.NarrationError as exc:
+        reason = str(exc)
+    if briefing is None or report is None:
+        briefing = narration_provider.TemplateProvider().write(payload, question)
+        report = grounding.check_grounding(briefing.text, payload)
+    if not report.grounded:  # pragma: no cover - the template quotes the payload
+        briefing = narration_provider.TemplateProvider().write(payload, None)
+        report = grounding.check_grounding(briefing.text, payload)
+        reason = reason or "the briefing could not be grounded"
+    return {
+        "tab": request.tab,
+        "day": str(day),
+        "window": request.window,
+        "text": briefing.text,
+        "provider": briefing.provider,
+        "model": briefing.model,
+        "grounded": report.grounded,
+        "unsupported": [claim.text for claim in report.unsupported],
+        "fell_back": reason is not None,
+        "rejected": rejected,
+        "fallback_reason": reason,
+        "follow_ups": narration_provider.FOLLOW_UPS,
+    }
 
 
 if FRONTEND.exists():

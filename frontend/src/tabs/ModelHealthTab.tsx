@@ -373,7 +373,7 @@ export function ModelHealthTab({ run }: { run: string }) {
   const ops = useApi(`ops|${run}`, (signal) => api.ops(run, signal));
   return (
     <div className="space-y-4">
-      <DeskBriefing />
+      <DeskBriefing tab="model_health" run={run} />
       <OpsRow state={ops} />
       <RegimePanel run={run} />
       <DriftPanel run={run} />
