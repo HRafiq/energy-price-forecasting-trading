@@ -37,7 +37,7 @@ export function OverviewTab({ run, date, battery, forecast }: OverviewTabProps) 
 
   return (
     <div className="space-y-4">
-      <DeskBriefing />
+      <DeskBriefing tab="overview" run={run} date={date} battery={battery} />
       <Panel
         title="Price forecast vs outcome"
         busy={isReloading(forecast)}

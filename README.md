@@ -19,6 +19,7 @@ A probabilistic price forecaster feeding a battery dispatch optimiser, backteste
 | Model health | Failure experiments measured in euros: a price regime shift, drift, a missing weather feed and the 12:00 deadline; an incident log | Walk-forward reruns, rolling alerts with thresholds fixed on validation, a fallback chain |
 | Live pipeline | A daily run that forecasts tomorrow, commits a schedule before the 12:00 gate and settles it the next day | Airflow DAG, readiness sensor with a deadline, fallback chain, MLflow model registry |
 | Dashboard | Forecast fan, calibration, error by hour, the day's schedule, cumulative profit for any battery from 0.5 to 5 MW and 1 to 4 hours, and a Model health tab | React and FastAPI over exported backtest results; one day's schedule solved on request |
+| Desk briefing | Three to five sentences about the tab you are on, and three follow-up questions | A language model given only that page's own numbers, with every figure it writes checked against them before it is shown |
 
 ## Results
 
@@ -194,6 +195,8 @@ make test       # ruff, strict mypy, pytest
 ```
 
 SMARD and Open-Meteo need no key. For ENTSO-E, register on the [Transparency Platform](https://transparency.entsoe.eu), email transparency@entsoe.eu asking for Restful API access, generate a token in your account settings and put `ENTSOE_API_KEY=<token>` in a gitignored `.env` file at the repository root. Downloads land in `data/raw/` and `data/processed/`, which are not committed.
+
+The desk briefing calls a model. Put `OPENAI_API_KEY=<key>` in the same gitignored `.env` to use it; with no key the briefing is written from the same payload by a deterministic writer, so the dashboard and every test run without one.
 
 On an Apple M2 Pro with 10 cores, the eight-model comparison takes 88 minutes, the five validation backtest suites 17, and the hold-out forecasts 5.
 

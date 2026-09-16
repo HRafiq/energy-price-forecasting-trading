@@ -29,7 +29,7 @@ export function ForecastTab({ run, windowKey }: { run: string | null; windowKey:
 
   return (
     <div className="space-y-4">
-      <DeskBriefing />
+      <DeskBriefing tab="forecast" run={run} windowKey={windowKey} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Panel
           title="Calibration"
