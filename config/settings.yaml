@@ -159,6 +159,11 @@ evaluation:
   # Confirmed 2026-09-13: training keeps eight months of genuine 15-minute
   # prices, including April and May.
   holdout_start: "2026-06-01"
+  # The hold-out was scored once, through this day. Days after it are new data:
+  # the live pipeline may forecast them, and nothing re-scores the hold-out.
+  holdout_last_day: "2026-09-14"
+  # First day the live pipeline may run for.
+  live_from: "2026-09-15"
   # First day forecast in walk-forward runs; leaves the history baselines need.
   first_target_day: "2019-01-01"
   # Model comparison window for Phase 2: two years ending at the hold-out,

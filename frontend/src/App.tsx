@@ -1,12 +1,12 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import type { BatteryQuery, RunInfo, SummaryResponse } from "./api";
+import type { BatteryQuery, RunInfo, RunKind, SummaryResponse } from "./api";
 import { api } from "./api";
 import { type BatteryGrid, batteryGrid, defaultBattery } from "./battery";
 import { type ControlValues, Controls } from "./components/Controls";
 import { Kpi } from "./components/Kpi";
 import { StatusMessage } from "./components/Loadable";
 import { Pill } from "./components/Pill";
-import { clock, eur, longDay, num, pct, windowPhrase } from "./format";
+import { clock, eur, localClock, longDay, num, pct, shortDay, windowPhrase } from "./format";
 import { type AsyncState, dataOf, useApi, useDebounced } from "./hooks";
 import { ForecastTab } from "./tabs/ForecastTab";
 import { ModelHealthTab } from "./tabs/ModelHealthTab";
@@ -42,7 +42,15 @@ function errorOf<T>(state: AsyncState<T>): string | null {
   return state.status === "error" ? state.error : null;
 }
 
-function KpiStrip({ state, gridAvailable }: { state: AsyncState<SummaryResponse>; gridAvailable: boolean | undefined }) {
+function KpiStrip({
+  state,
+  gridAvailable,
+  runKind,
+}: {
+  state: AsyncState<SummaryResponse>;
+  gridAvailable: boolean | undefined;
+  runKind: RunKind | undefined;
+}) {
   const s = dataOf(state);
   const k = s?.kpis;
   const failed = state.status === "error";
@@ -81,7 +89,9 @@ function KpiStrip({ state, gridAvailable }: { state: AsyncState<SummaryResponse>
       {state.status === "error" ? (
         <p className="text-xs mt-2" role="status" style={{ color: C.muted }}>
           {gridAvailable === false
-            ? "P&L grid still exporting. The KPIs appear after the export finishes and the page is reloaded."
+            ? runKind === "live"
+              ? "A live run carries today's forecast and schedule, not the battery P&L grid. The KPIs are on the backtest run."
+              : "P&L grid still exporting. The KPIs appear after the export finishes and the page is reloaded."
             : `Could not load the KPIs: ${state.error}`}
         </p>
       ) : null}
@@ -91,6 +101,9 @@ function KpiStrip({ state, gridAvailable }: { state: AsyncState<SummaryResponse>
 
 interface ShellProps {
   context: string;
+  /** A muted aside beside the context line, such as prices not published yet. */
+  note: string | null;
+  runKind: RunKind;
   holdout: boolean;
   tab: Tab;
   onTab: (tab: Tab) => void;
@@ -98,7 +111,7 @@ interface ShellProps {
   children: ReactNode;
 }
 
-function Shell({ context, holdout, tab, onTab, runId, children }: ShellProps) {
+function Shell({ context, note, runKind, holdout, tab, onTab, runId, children }: ShellProps) {
   return (
     <div className="min-h-screen w-full" style={{ background: C.bg, color: C.text, fontFamily: FONT_STACK }}>
       <div className="max-w-6xl mx-auto px-3 sm:px-4 py-5">
@@ -107,8 +120,17 @@ function Shell({ context, holdout, tab, onTab, runId, children }: ShellProps) {
           <span className="text-xs tabular-nums" style={{ color: C.muted }}>
             {context}
           </span>
+          {note ? (
+            <span className="text-xs" style={{ color: C.muted }}>
+              {note}
+            </span>
+          ) : null}
           <span className="flex gap-2 sm:ml-auto">
-            <Pill label="backtest · historical data" color={C.good} rgb="121,195,152" />
+            <Pill
+              label={runKind === "live" ? "live · today's run" : "backtest · historical data"}
+              color={C.good}
+              rgb="121,195,152"
+            />
             {holdout ? <Pill label="hold-out" color={C.warn} rgb="232,161,60" /> : null}
           </span>
         </header>
@@ -213,13 +235,29 @@ function Dashboard({ run, grid, tab, onTab }: { run: RunInfo; grid: BatteryGrid;
   else if (forecast.status === "error") context = `Delivery ${longDay(date)} · forecast unavailable: ${forecast.error}`;
   else context = `Delivery ${longDay(date)} · loading forecast…`;
 
+  // A live run says when today's forecast was issued, in market local time, and
+  // flags a delivery day whose prices the market has not published yet.
+  const runKind: RunKind = run.run_kind ?? "backtest";
+  const isLive = runKind === "live";
+  if (isLive && run.issued_utc) context += ` · run issued ${localClock(run.issued_utc, run.timezone ?? "UTC")} local`;
+  const priceNote =
+    isLive && date && run.data_through && run.data_through < date
+      ? `prices for ${shortDay(date)} not published yet`
+      : null;
+
   // The battery and strategy controls and the P&L KPIs do not apply to Model health,
   // so that tab hides them; the control values are kept for the other tabs.
   const tradingControls = tab !== "Model health";
 
   return (
-    <Shell context={context} holdout={isHoldout} tab={tab} onTab={onTab} runId={runId}>
-      {tradingControls ? <KpiStrip state={summary} gridAvailable={run.grid_available} /> : null}
+    <Shell context={context} note={priceNote} runKind={runKind} holdout={isHoldout} tab={tab} onTab={onTab} runId={runId}>
+      {tradingControls ? (
+        <KpiStrip
+          state={summary}
+          gridAvailable={run.grid_available}
+          runKind={run.run_kind}
+        />
+      ) : null}
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         {tradingControls ? (
@@ -240,7 +278,15 @@ function Dashboard({ run, grid, tab, onTab }: { run: RunInfo; grid: BatteryGrid;
         >
           {tab === "Overview" && <OverviewTab run={runId} date={date} battery={battery} forecast={forecast} />}
           {tab === "Forecast" && <ForecastTab run={runId} windowKey={windowKey} />}
-          {tab === "Trading" && <TradingTab run={runId} windowKey={windowKey} battery={battery} gridAvailable={run.grid_available} />}
+          {tab === "Trading" && (
+            <TradingTab
+              run={runId}
+              windowKey={windowKey}
+              battery={battery}
+              gridAvailable={run.grid_available}
+              runKind={run.run_kind}
+            />
+          )}
           {tab === "Model health" && <ModelHealthTab run={runId} />}
         </main>
       </div>
@@ -272,7 +318,7 @@ export default function App() {
   if (!run || !grid) {
     const message = runsError ? `Could not load the run: ${runsError}` : "Loading run…";
     return (
-      <Shell context={message} holdout={false} tab={tab} onTab={setTab} runId={null}>
+      <Shell context={message} note={null} runKind="backtest" holdout={false} tab={tab} onTab={setTab} runId={null}>
         <main
           id={PANEL_ID}
           role="tabpanel"

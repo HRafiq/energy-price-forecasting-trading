@@ -17,6 +17,7 @@ A probabilistic price forecaster feeding a battery dispatch optimiser, backteste
 | Battery optimiser | Charge and discharge schedule for one delivery day | MILP in PuLP with CBC, wear cost, two-cycle cap |
 | Backtester | Walk-forward over two years, profit against perfect foresight, one frozen hold-out | Daily re-solve, Shapley attribution, block bootstrap |
 | Model health | Failure experiments measured in euros: a price regime shift, drift, a missing weather feed and the 12:00 deadline; an incident log | Walk-forward reruns, rolling alerts with thresholds fixed on validation, a fallback chain |
+| Live pipeline | A daily run that forecasts tomorrow, commits a schedule before the 12:00 gate and settles it the next day | Airflow DAG, readiness sensor with a deadline, fallback chain, MLflow model registry |
 | Dashboard | Forecast fan, calibration, error by hour, the day's schedule, cumulative profit for any battery from 0.5 to 5 MW and 1 to 4 hours, and a Model health tab | React and FastAPI over exported backtest results; one day's schedule solved on request |
 
 ## Results
@@ -76,6 +77,47 @@ I broke the pipeline on purpose and measured what it cost.
 - A missing weather feed at 11:40 cost 2.3 capture points, €3,742 over two years; falling back to a model trained without weather cut that to €1,973.
 - With pipeline failures injected on 13% of days, my fallback chain still submitted a forecast before the 12:00 gate every day in my simulation, and kept €15,898 that a pipeline without fallbacks, and so without a position on those days, would have lost.
 
+### The daily pipeline
+
+The same code that ran the backtest runs as a daily job. At 10:30 it refreshes the
+feeds, waits for tomorrow's load forecast and weather, forecasts at 11:40 and commits
+a schedule before the 12:00 gate. The next day it settles what it committed, once the
+auction has published the prices.
+
+```mermaid
+flowchart LR
+  A[ingest prices] --> D[build inputs]
+  B[ingest weather] --> D
+  C[ingest fuels] --> D
+  D --> E{wait for inputs<br/>deadline 11:30}
+  E -->|feeds arrived| F[forecast]
+  E -->|timed out| G[forecast, degraded]
+  F --> H[export dashboard]
+  G --> H
+  H --> I[settle yesterday]
+```
+
+- **A late feed does not stop the bid.** The chain steps down from the production
+  model to a model without weather, then seasonal naive, then yesterday's prices, and
+  writes an incident saying which step ran and when the forecast went out.
+- **The model comes from the MLflow registry,** so the pipeline serves a version that
+  was trained and logged deliberately, not one fitted on the spot.
+- **A live day cannot be settled when it is traded,** so the run commits a plan and a
+  separate step values it once prices publish.
+- **The hold-out stays frozen:** the pipeline refuses any delivery day before
+  `live_from`, the day after the hold-out was last scored.
+
+**What the first runs did.** On 16 September 2026 every feed was published, the
+pipeline served the model registered as version 1 and committed a schedule worth
+€289. For 17 September the load forecast and weather had not arrived: the sensor
+gave up, the chain skipped the production and no-weather steps, and seasonal naive
+committed a schedule worth €783, with an incident naming the missing feeds and the
+time the forecast went out. Both runs were made after the gate, so both are recorded
+as late, which is what the incident log says.
+
+Run it without Airflow with `make pipeline DAY=2026-09-17`, or start the scheduler
+with `make airflow`.
+
 ## Three things I learned
 
 - Timing beat accuracy in my backtest: an evening forecast one hour early, with a €7/MWh average error, cost as much as random noise at €16/MWh.
@@ -91,7 +133,8 @@ I broke the pipeline on purpose and measured what it cost.
 - The hold-out is 105 summer days and public data has gaps. Failure rates in the deadline simulation are assumptions, not measured outages.
 - Not a trading recommendation.
 
-A production system would add a live pipeline, intraday re-optimisation and bid curves. Phase 7 adds the scheduled pipeline.
+A production system would add intraday re-optimisation and bid curves on top of what
+is here.
 
 ## Architecture
 
@@ -116,6 +159,8 @@ src/features/            features built only from what is known at 11:40
 src/forecasting/         information set, walk-forward harness, eight models, hold-out runner
 src/trading/             battery, MILP optimiser, settlement, strategies, backtest, attribution
 src/health/              drift monitor, incident log and failure experiments (M1, M2, M3, T4, D1, D5)
+src/pipeline/            the daily live run: readiness, fallback chain, plan, model registry
+dags/                    the Airflow DAG, thin: every task shells into src/
 src/export/              dashboard artifacts: forecasts, P&L grid, attribution
 api/                     read-only FastAPI service behind the dashboard
 frontend/                React, TypeScript and recharts dashboard
@@ -141,6 +186,9 @@ make export     # dashboard artifacts, including the P&L grid for 104 battery se
 make experiments # Phase 6 failure experiments: regime shift, missing weather, deadline, drift
 make health     # drift monitor and incident log from saved forecasts
 make mlflow     # browse the recorded experiment runs at http://127.0.0.1:5001
+make airflow-setup # create the Airflow environment, once
+make airflow    # scheduler and UI at http://127.0.0.1:8080
+make pipeline   # one live run without Airflow: make pipeline DAY=2026-09-17
 make dashboard  # build the React app and serve it with the API at http://127.0.0.1:8000
 make test       # ruff, strict mypy, pytest
 ```

@@ -220,6 +220,8 @@ class AvailabilityConfig(_Frozen):
 
 class EvaluationConfig(_Frozen):
     holdout_start: date
+    holdout_last_day: date
+    live_from: date
     first_target_day: date
     validation_start: date
     spike_threshold_eur_mwh: float = Field(gt=0)

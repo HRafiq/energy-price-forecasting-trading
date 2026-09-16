@@ -4,6 +4,8 @@
 export type WindowKey = "last30" | "last90" | "validation" | "holdout" | "all";
 export type StrategyKey = "median" | "q25" | "q10";
 export type DayWindow = "validation" | "holdout";
+/** A replay of history, or a run the daily pipeline produced today. */
+export type RunKind = "backtest" | "live";
 
 export interface BatteryQuery {
   duration: number;
@@ -34,6 +36,8 @@ export interface Health {
   traded_days: number;
   mode: string;
   grid_available?: boolean;
+  /** Absent in an API older than the live pipeline; treat as "backtest". */
+  run_kind?: RunKind;
 }
 
 export interface RunInfo {
@@ -48,6 +52,14 @@ export interface RunInfo {
   reference_battery: ReferenceBattery;
   grid: RunGrid;
   mode: string;
+  /** Absent in an API older than the live pipeline; treat as "backtest". */
+  run_kind?: RunKind;
+  /** When a live run issued its forecast, UTC; null for a backtest. */
+  issued_utc?: string | null;
+  /** Last delivery day with published prices; a live run can forecast past it. */
+  data_through?: string | null;
+  /** The market's timezone, for showing issue times in market local time. */
+  timezone?: string;
   /** Present in the live API, not in docs/dashboard_api.md. */
   source_commit?: string;
   /** False while the P&L grid export is still running (summary and pnl answer 503). */

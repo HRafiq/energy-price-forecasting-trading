@@ -1,4 +1,4 @@
-import type { BatteryQuery, PnlResponse, WindowKey } from "../api";
+import type { BatteryQuery, PnlResponse, RunKind, WindowKey } from "../api";
 import { api } from "../api";
 import { AsymmetryChart } from "../components/charts/AsymmetryChart";
 import { asymmetryNote } from "../components/charts/asymmetry";
@@ -16,6 +16,7 @@ interface TradingTabProps {
   battery: BatteryQuery;
   /** False while the P&L grid export is still running. */
   gridAvailable: boolean | undefined;
+  runKind: RunKind | undefined;
 }
 
 function pnlSub(p: PnlResponse | null): string {
@@ -27,7 +28,13 @@ function pnlSub(p: PnlResponse | null): string {
   return `${base} · max drawdown: ${parts.join(", ")} · ${p.window.traded_days} traded days`;
 }
 
-export function TradingTab({ run, windowKey, battery, gridAvailable }: TradingTabProps) {
+export function TradingTab({
+  run,
+  windowKey,
+  battery,
+  gridAvailable,
+  runKind,
+}: TradingTabProps) {
   const pnlKey = run
     ? ["pnl", run, windowKey, battery.power, battery.duration, battery.degradation, battery.strategy].join("|")
     : null;
@@ -45,7 +52,9 @@ export function TradingTab({ run, windowKey, battery, gridAvailable }: TradingTa
       <Panel title="Cumulative P&L by strategy" busy={isReloading(pnl)} sub={pnlSub(dataOf(pnl))}>
         {pnl.status === "error" && gridAvailable === false ? (
           <StatusMessage height={260}>
-            P&L grid still exporting. The chart appears after the export finishes and the page is reloaded.
+            {runKind === "live"
+              ? "A live run carries today's forecast and schedule, not the battery P&L grid. The cumulative P&L is on the backtest run."
+              : "P&L grid still exporting. The chart appears after the export finishes and the page is reloaded."}
           </StatusMessage>
         ) : (
           <Loadable state={pnl} height={260}>

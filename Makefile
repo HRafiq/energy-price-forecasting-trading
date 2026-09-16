@@ -1,9 +1,18 @@
 # Short names for the pipeline commands in the README. `make help` lists them.
 UV := uv run
 MLFLOW_PORT ?= 5001
+AIRFLOW_PORT ?= 8080
+AIRFLOW_VERSION ?= 3.3.1
+# Delivery day for a one-off pipeline run; tomorrow by default.
+DAY ?= $(shell date -v+1d +%F 2>/dev/null || date -d tomorrow +%F)
+# Airflow keeps its database and logs here; the DAGs live in the repo.
+AIRFLOW_ENV := AIRFLOW_HOME=$(CURDIR)/airflow_home \
+	AIRFLOW__CORE__DAGS_FOLDER=$(CURDIR)/dags \
+	AIRFLOW__CORE__LOAD_EXAMPLES=False
+AIRFLOW := $(AIRFLOW_ENV) $(CURDIR)/.venv-airflow/bin/airflow
 SUITES := validation decision-value synthetic degradation attribution
 
-.PHONY: help setup data entsoe forecast backtest holdout report figures export api web dashboard health experiments mlflow test
+.PHONY: help setup data entsoe forecast backtest holdout report figures export api web dashboard health experiments mlflow airflow airflow-setup pipeline settle test
 
 help:
 	@echo "setup     install dependencies with uv"
@@ -21,6 +30,10 @@ help:
 	@echo "health    drift monitor (M2) and incident log from saved forecasts"
 	@echo "experiments Phase 6 failure experiments: M1, D1, D5, then M2"
 	@echo "mlflow    MLflow UI for the experiment runs at http://127.0.0.1:$(MLFLOW_PORT)"
+	@echo "airflow-setup  create the Airflow environment in .venv-airflow"
+	@echo "airflow   Airflow UI and scheduler at http://127.0.0.1:$(AIRFLOW_PORT)"
+	@echo "pipeline  one live run without Airflow: make pipeline DAY=2026-09-17"
+	@echo "settle    value the schedule committed for a day: make settle DAY=2026-09-16"
 	@echo "test      lint, type checks and tests"
 
 setup:
@@ -82,6 +95,26 @@ experiments:
 
 mlflow:
 	$(UV) mlflow ui --backend-store-uri sqlite:///mlflow.db --port $(MLFLOW_PORT)
+
+airflow-setup:
+	uv venv --python 3.11 .venv-airflow
+	.venv-airflow/bin/python -m ensurepip --upgrade
+	.venv-airflow/bin/python -m pip install "apache-airflow==$(AIRFLOW_VERSION)" \
+		--constraint "https://raw.githubusercontent.com/apache/airflow/constraints-$(AIRFLOW_VERSION)/constraints-3.11.txt"
+	$(AIRFLOW) db migrate
+
+airflow:
+	$(AIRFLOW) standalone
+
+pipeline:
+	$(UV) python -m src.ingest.build_dataset
+	$(UV) python -m src.ingest.open_meteo
+	$(UV) python -m src.ingest.fuels
+	$(UV) python -m src.ingest.build_inputs
+	$(UV) python -m src.pipeline.daily_run --day $(DAY)
+
+settle:
+	$(UV) python -m src.pipeline.daily_run --day $(DAY) --settle
 
 test:
 	$(UV) ruff check .

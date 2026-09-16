@@ -705,7 +705,6 @@ the worker pool is retried once on its own, and the export stops only if it fail
 again. Every file is swapped in whole and the manifest is written last, so the API
 never reads half an export.
 
-
 ## 14. Model health data
 
 Phase 6 adds two kinds of data: an incident log, and the outputs of the failure
@@ -761,6 +760,47 @@ after its thresholds are fixed on validation days.
 A `--quick` D1 run writes the same files with a `d1_quick_` prefix, and short M1
 runs write to their own subfolder; neither feeds the dashboard or the docs.
 
+## 15. Live pipeline data
+
+Phase 7 runs the forecast as a daily job instead of a backtest. A live day cannot
+be settled when it is traded: the schedule is committed before the 12:00 gate and
+the prices it will be paid clear afterwards. So the pipeline writes a plan, and
+settles it once the prices are published.
+
+| File | What it holds | Written by |
+|---|---|---|
+| `data/processed/pipeline/plans/<day>.parquet` | The committed schedule for one delivery day: charge, discharge, net power and state of charge per period, the forecast prices it was optimised against, and the metadata a later settlement needs: which chain step and model produced the forecast, when it was issued, the product length and the planned value | `src.pipeline.plan` |
+| `data/processed/forecasts/production/<day>.parquet` | The quantile forecast the plan was built from, as in earlier phases | `src.forecasting.production` |
+
+**Which day may run.** `evaluation.holdout_last_day` is the last day the hold-out was
+ever scored, and `evaluation.live_from` is the first day the live pipeline may
+forecast. Days between them stay frozen, so a live run can never re-score the
+hold-out.
+
+**Readiness.** Before forecasting, the pipeline checks four feeds for the delivery
+day: yesterday's prices, the load forecast, the weather, and the last gas and carbon
+settlement. `src.pipeline.readiness` reports each feed separately and exits non-zero
+while any is missing, which is what the sensor polls.
+
+**The fallback chain.** If a feed is late the pipeline steps down: the production
+model, then the model without weather, then seasonal naive, then naive previous day.
+Each step declares the feeds it needs, so a missing feed removes it before anything
+is fitted, and every attempt is recorded. Seasonal naive comes before naive previous
+day because it earned more on validation; see the D5 section of the production notes.
+
+**The model the pipeline serves.** `src.pipeline.model_source` registers a fitted
+production model in the local MLflow registry as `price-quantile-gbm` and moves the
+`production` alias to it. The daily run loads that alias and never refits it; a new
+training day means a new registered version. With nothing registered, the run says so
+and the chain fits a model on the spot instead.
+
+**Airflow.** The DAG runs in its own environment, `.venv-airflow`, with its database
+and logs under `airflow_home/`. Neither is committed. The DAG file lives in `dags/`
+and every task shells into `src/`, so the pipeline can be run without Airflow. The deadline is a task of its own, `check_deadline`: Airflow 3 removed task-level
+SLAs and its DAG-level deadline alerts could not run in a test, so the check reads
+the run record after the export and writes a critical pipeline incident when the
+schedule was committed after the 12:00 gate.
+
 ---
 
 ## Changelog
@@ -778,3 +818,4 @@ runs write to their own subfolder; neither feeds the dashboard or the docs.
 | 2026-09-14 | 4 | Section 12: backtest experiments, hold-out results and outputs |
 | 2026-09-14 | 5 | Section 13: dashboard artifacts and how the controls use them |
 | 2026-09-15 | 6 | Section 14: incident log and failure experiment outputs |
+| 2026-09-16 | 7 | Section 15: live pipeline plans, readiness and the fallback chain |

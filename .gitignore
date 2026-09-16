@@ -232,3 +232,7 @@ docs/learning_notes.md
 
 # Local editor and agent tooling
 .claude/
+
+# Airflow: its own environment and home, never committed
+.venv-airflow/
+airflow_home/

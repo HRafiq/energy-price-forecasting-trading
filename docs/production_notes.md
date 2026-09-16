@@ -515,7 +515,23 @@ day writes an incident marked as simulated: 76 late data, 19 pipeline.
 
 **Mitigation:** the chain itself, with a hard stop on every step so a hung model
 falls through to a baseline instead of waiting past the gate. Phase 7 implements it
-as the Airflow sensor and branch.
+as the Airflow sensor and branch, with one change decided on validation profit: the
+live chain puts seasonal naive ahead of naive previous day, because it earned
+€132,292 against €128,836 on the same 730 days, 79.7% of perfect foresight against
+77.6%, although its pinball loss is worse, 11.49 against 9.61. The experiment above
+keeps the order it was frozen with, so its numbers stand as reported.
+
+**Built in Phase 7:** the chain is no longer only a simulation. The daily pipeline
+runs it for real: a readiness check reports each feed separately, the chain steps
+down when one is late, and every fallback writes an incident with the step used and
+the time the forecast went out. A first live run for 17 September 2026 found the load
+forecast and weather unpublished, skipped the production and no-weather rungs, and
+committed a seasonal naive schedule worth €783. A run for 16 September, whose feeds
+were complete, used the production model served from the MLflow registry and
+committed €289. Airflow 3 removed task-level SLAs, and its DAG-level deadline alerts crashed the
+end-to-end test run, so the deadline is a task of its own: after the export, it
+compares the time the forecast went out with the 12:00 gate from the run record
+and writes a critical pipeline incident when the schedule was committed late.
 
 **In my words:** _to write_
 

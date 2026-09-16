@@ -91,6 +91,7 @@ def health(root: Root) -> dict[str, Any]:
     return {
         "status": "ok",
         "run": run.run_id,
+        "run_kind": info["run_kind"],
         "traded_days": info["traded_days"],
         "grid_available": info["grid_available"],
         "mode": info["mode"],
