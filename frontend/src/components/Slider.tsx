@@ -44,7 +44,6 @@ export function Slider(props: SliderProps) {
         aria-valuetext={text}
         onChange={(e) => onChange(range.toValue(Number(e.target.value)))}
         className="w-full"
-        style={{ accentColor: C.price }}
       />
     </label>
   );

@@ -1,0 +1,2 @@
+# Notebooks are reports, not the codebase: keep them out of the language stats.
+*.ipynb linguist-documentation

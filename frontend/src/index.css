@@ -1,14 +1,14 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: dark;
-  background: #0d1522;
+  color-scheme: light;
+  background: #f2f2ef;
 }
 
 body {
   margin: 0;
-  background: #0d1522;
-  color: #e6ecf5;
+  background: #f2f2ef;
+  color: #0b0b0b;
   font-family: ui-sans-serif, system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
@@ -21,10 +21,55 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-input[type="date"]::-webkit-calendar-picker-indicator {
-  filter: invert(0.7);
-}
-
 button:disabled {
   cursor: not-allowed;
+}
+
+/* Range sliders. The browser paints the unfilled track from its own theme, which
+   comes out near-black on this page whatever color-scheme the document declares,
+   so the track and thumb are drawn here instead. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 16px;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #e1e0d9;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -5px;
+  border: none;
+  border-radius: 999px;
+  background: #eb6834;
+}
+
+input[type="range"]::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #e1e0d9;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 999px;
+  background: #eb6834;
+}
+
+input[type="range"]:focus-visible::-webkit-slider-thumb,
+input[type="range"]:focus-visible::-moz-range-thumb {
+  outline: 2px solid #2a78d6;
+  outline-offset: 2px;
 }

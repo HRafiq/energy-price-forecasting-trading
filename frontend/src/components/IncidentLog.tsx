@@ -54,7 +54,7 @@ function IncidentRow({ incident }: { incident: Incident }) {
         <span className="text-sm font-medium tabular-nums" style={{ color: C.text }}>
           {longDay(incident.delivery_day)}
         </span>
-        <Pill label={typeLabel(incident.type)} color="#9dc3e2" rgb="79,143,197" />
+        <Pill label={typeLabel(incident.type)} color={C.bandLine} />
         {/* Severity and provenance wrap as one unit, so the separator never starts a line. */}
         <span className="text-xs whitespace-nowrap">
           <span style={{ color: SEVERITY_COLOR[incident.severity] }}>{incident.severity}</span>
@@ -62,14 +62,14 @@ function IncidentRow({ incident }: { incident: Incident }) {
         </span>
         {incident.in_sample ? (
           <span title="Its day lies in the validation window its threshold was fitted on">
-            <Pill label="in-sample" color={C.muted} rgb="127,142,166" />
+            <Pill label="in-sample" color={C.muted} />
           </span>
         ) : null}
         <span className="ml-auto">
           {resolved ? (
-            <Pill label="resolved" color={C.good} rgb="121,195,152" />
+            <Pill label="resolved" color={C.good} />
           ) : (
-            <Pill label="review" color={C.warn} rgb="232,161,60" />
+            <Pill label="review" color={C.warn} />
           )}
         </span>
       </div>
