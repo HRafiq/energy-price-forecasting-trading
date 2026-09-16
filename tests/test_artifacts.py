@@ -85,6 +85,80 @@ def test_manifest_lists_days_windows_and_the_grid(settings: Settings) -> None:
     }
     assert manifest["first_day"] == str(traded[0])
     assert manifest["last_day"] == str(traded[-1])
+    # A run is a backtest unless the live pipeline says otherwise, and a backtest's
+    # prices run to its last day.
+    assert manifest["run_kind"] == "backtest"
+    assert manifest["issued_utc"] is None
+    assert manifest["data_through"] == str(traded[-1])
+
+
+def test_manifest_records_a_live_run_and_the_prices_it_has(settings: Settings) -> None:
+    holdout = settings.evaluation.holdout_start
+    days = [holdout + timedelta(days=1), holdout + timedelta(days=2)]
+    manifest = art.build_manifest(
+        settings,
+        "live-x",
+        days,
+        {},
+        run_kind="live",
+        issued_utc="2026-09-16T09:40:00+00:00",
+        data_through=days[0],
+    )
+    assert manifest["run_kind"] == "live"
+    assert manifest["issued_utc"] == "2026-09-16T09:40:00+00:00"
+    # The last day it forecasts is a day ahead of the last published price.
+    assert manifest["data_through"] == str(days[0])
+    assert manifest["last_day"] == str(days[-1])
+
+
+def test_a_live_run_is_named_after_the_day_it_ran(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live export is named for the day it ran, not for the backtest it reads.
+
+    The first real export took its name from the last backtest forecast, two days
+    earlier, and pointed the dashboard at it. Only the command decides the name,
+    so only the command can be tested for it.
+    """
+    local = _local(settings, tmp_path)
+    monkeypatch.setattr(art, "load_settings", lambda config=None: local)
+    days = [date(2025, 11, 20), date(2025, 11, 21)]
+    saved = pd.concat(
+        day_frame(local, day, seed=i) for i, day in enumerate(days)
+    ).assign(model=local.forecasting.production_model, window="validation")
+    comparison = local.data.processed_path / "forecasts" / "comparison"
+    comparison.mkdir(parents=True)
+    saved.to_parquet(comparison / f"{local.forecasting.production_model}.parquet")
+
+    art.main(
+        [
+            "--steps",
+            "health",
+            "--run-kind",
+            "live",
+            "--issued-utc",
+            "2026-09-16T22:40:00+00:00",
+        ]
+    )
+    art.main(
+        [
+            "--steps",
+            "health",
+            "--run-kind",
+            "live",
+            "--issued-utc",
+            "2026-09-17T05:00:00",
+        ]
+    )
+    art.main(["--steps", "health"])
+
+    runs = sorted(
+        p.name
+        for p in (local.data.processed_path / "dashboard").iterdir()
+        if p.is_dir()
+    )
+    # 22:40 UTC is the next day in Berlin; the naive value is read as UTC.
+    assert runs == ["backtest-2025-11-21", "live-2026-09-17"]
 
 
 def test_pnl_grid_saves_and_reuses_cells(
@@ -446,3 +520,42 @@ def test_a_failed_write_leaves_no_partial_file(tmp_path: Path) -> None:
     art.write_json({"ok": True}, path)
     assert json.loads(path.read_text(encoding="utf-8")) == {"ok": True}
     assert not list(path.parent.glob(".*.partial"))
+
+
+def test_a_live_export_carries_the_days_own_run_record(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """Without this, a live run shows only backtest artifacts under a live label."""
+    local = _local(settings, tmp_path)
+    day = date(2026, 9, 17)
+    runs = local.data.processed_path / "pipeline" / "runs"
+    runs.mkdir(parents=True)
+    record = {
+        "target_day": str(day),
+        "issued_utc": "2026-09-16T09:40:00+00:00",
+        "gate_utc": "2026-09-16T10:00:00+00:00",
+        "on_time": True,
+        "minutes_before_gate": 20.0,
+        "step": "seasonal_naive",
+        "model": "seasonal_naive_previous_week",
+        "model_version": None,
+        "readiness": {"ready": False, "missing": ["weather"], "feeds": []},
+        "attempts": [{"step": "production", "used": False, "detail": "skipped"}],
+        "planned_value_eur": 783.13,
+        "solve_seconds": 0.08,
+        "incidents": ["abc123"],
+    }
+    (runs / f"{day}.json").write_text(json.dumps(record), encoding="utf-8")
+    run_dir = local.data.processed_path / "dashboard" / "live-2026-09-16"
+
+    index = art.export_health(local, run_dir, live_day=day)
+
+    summary = json.loads((run_dir / "health" / art.HEALTH_LIVE_DAY).read_text())
+    assert summary["target_day"] == str(day) and summary["step"] == "seasonal_naive"
+    assert summary["planned_value_eur"] == 783.13 and summary["on_time"] is True
+    assert art.HEALTH_LIVE_DAY in [f["file"] for f in index["files"]]
+
+    # A backtest export has no such day, and leaves no stale copy behind.
+    again = art.export_health(local, run_dir, live_day=None)
+    assert not (run_dir / "health" / art.HEALTH_LIVE_DAY).exists()
+    assert art.HEALTH_LIVE_DAY not in [f["file"] for f in again["files"]]

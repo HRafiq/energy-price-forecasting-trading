@@ -102,6 +102,21 @@ export function monthYear(date: string): string {
   return `${MONTHS[d.getUTCMonth()]} ${String(d.getUTCFullYear()).slice(2)}`;
 }
 
+/**
+ * An ISO UTC timestamp as a clock time in the market's timezone:
+ * "2026-09-16T07:40:00+00:00" in "Europe/Berlin" -> "09:40".
+ */
+export function localClock(utcTimestamp: string, timeZone: string): string {
+  const at = new Date(utcTimestamp);
+  if (Number.isNaN(at.getTime())) return utcTimestamp;
+  try {
+    return new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hour12: false }).format(at);
+  } catch {
+    // An unknown timezone name: show the UTC clock rather than nothing.
+    return at.toISOString().slice(11, 16);
+  }
+}
+
 /** "2025-11-20 11:40" -> "11:40" */
 export function clock(localTimestamp: string): string {
   const match = /(\d{2}:\d{2})/.exec(localTimestamp);

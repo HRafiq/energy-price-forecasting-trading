@@ -38,17 +38,18 @@ label.
 ### `GET /api/health`
 
 ```json
-{"status": "ok", "run": "backtest-2026-09-14", "traded_days": 835, "grid_available": true,
- "mode": "Battery results come from a pre-computed grid at 1 MW ..."}
+{"status": "ok", "run": "backtest-2026-09-14", "run_kind": "backtest", "traded_days": 835,
+ "grid_available": true, "mode": "Battery results come from a pre-computed grid at 1 MW ..."}
 ```
 
 ### `GET /api/runs`
 
 ```json
-[{"run_id": "backtest-2026-09-14", "created_utc": "2026-09-14T18:00:00+00:00",
-  "source_commit": "8689442", "grid_available": true,
+[{"run_id": "backtest-2026-09-14", "run_kind": "backtest", "created_utc": "2026-09-14T18:00:00+00:00",
+  "issued_utc": null, "source_commit": "8689442", "grid_available": true,
   "model": "lightgbm_conformal", "baseline_model": "naive_previous_day",
-  "first_day": "2024-06-01", "last_day": "2026-09-14", "holdout_start": "2026-06-01",
+  "first_day": "2024-06-01", "last_day": "2026-09-14", "data_through": "2026-09-14",
+  "holdout_start": "2026-06-01", "timezone": "Europe/Berlin",
   "traded_days": 835,
   "reference_battery": {"power_mw": 1.0, "capacity_mwh": 2.0, "round_trip_efficiency": 0.9,
                         "degradation_eur_per_mwh": 8.0, "initial_soc_fraction": 0.5,
@@ -58,6 +59,17 @@ label.
            "strategies": {"median": "median_forecast", "q25": "quantile_q25", "q10": "quantile_q10"}},
   "mode": "..."}]
 ```
+
+`run_kind` is `backtest` for a replay of history and `live` for a run the daily
+pipeline produced. A live run also carries `issued_utc`, the UTC time it issued its
+forecast (null for a backtest); both carry `data_through`, the last delivery day with
+published prices, which on a live run can be behind the day it forecasts. A manifest
+written before live runs carries none of the three and is served as a backtest, with
+`issued_utc` null and `data_through` at the run's last day. `timezone` is the market's
+timezone, which the dashboard uses to show `issued_utc` in market local time. The
+header pill reads `run_kind`: "live · today's run", otherwise "backtest · historical
+data"; a live run whose `data_through` is behind the delivery day on screen also gets a
+muted note that those prices are not published yet.
 
 ### `GET /api/days`
 

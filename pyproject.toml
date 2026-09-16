@@ -78,7 +78,13 @@ python_version = "3.11"
 strict = true
 plugins = ["pydantic.mypy"]
 warn_unreachable = true
-files = ["src", "tests", "api"]
+files = ["src", "tests", "api", "dags"]
+
+# Airflow and pendulum live in .venv-airflow, not in the project environment, so
+# the DAG's imports have no stubs here. Everything else in dags/ is still checked.
+[[tool.mypy.overrides]]
+module = ["airflow.*", "pendulum.*"]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["sklearn.*", "quantile_forest.*", "statsforecast.*", "yfinance.*", "pulp.*", "scipy.*"]

@@ -220,11 +220,17 @@ def run_info(run: Run) -> dict[str, Any]:
         "first_day",
         "last_day",
         "holdout_start",
+        "timezone",
         "reference_battery",
         "grid",
         "mode",
     )
     info = {key: manifest.get(key) for key in keys}
+    # A manifest written before live runs has none of the three below: it is a
+    # backtest, issued nowhere in particular, whose prices run to its last day.
+    info["run_kind"] = manifest.get("run_kind") or "backtest"
+    info["issued_utc"] = manifest.get("issued_utc")
+    info["data_through"] = manifest.get("data_through") or manifest.get("last_day")
     info["traded_days"] = sum(1 for day in manifest["days"] if day["traded"])
     info["grid_available"] = run.grid is not None
     return info

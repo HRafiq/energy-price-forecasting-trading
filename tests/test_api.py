@@ -135,10 +135,45 @@ def test_health_runs_and_days(client: TestClient) -> None:
     health = client.get("/api/health").json()
     assert health["status"] == "ok" and health["run"] == RUN
     assert health["traded_days"] == 3 and health["grid_available"] is True
+    assert health["run_kind"] == "backtest"
     (run,) = client.get("/api/runs").json()
     assert run["run_id"] == RUN and "mode" in run
+    assert run["run_kind"] == "backtest" and run["issued_utc"] is None
+    assert run["data_through"] == run["last_day"]
     days = client.get("/api/days").json()["days"]
     assert [d["traded"] for d in days] == [True, True, False, True]
+
+
+def test_a_live_run_is_served_and_an_older_manifest_is_a_backtest(
+    client: TestClient, root: Path
+) -> None:
+    path = root / RUN / "manifest.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    live = manifest | {
+        "run_kind": "live",
+        "issued_utc": "2026-09-16T09:40:00+00:00",
+        "data_through": "2026-09-15",
+    }
+    path.write_text(json.dumps(live), encoding="utf-8")
+    _bump(path)
+    (run,) = client.get("/api/runs").json()
+    assert run["run_kind"] == "live"
+    assert run["issued_utc"] == "2026-09-16T09:40:00+00:00"
+    assert run["data_through"] == "2026-09-15"
+    assert run["timezone"] == manifest["timezone"]
+    assert client.get("/api/health").json()["run_kind"] == "live"
+
+    older = {
+        key: value
+        for key, value in manifest.items()
+        if key not in {"run_kind", "issued_utc", "data_through"}
+    }
+    path.write_text(json.dumps(older), encoding="utf-8")
+    _bump(path)
+    (run,) = client.get("/api/runs").json()
+    assert run["run_kind"] == "backtest" and run["issued_utc"] is None
+    assert run["data_through"] == run["last_day"]
+    assert client.get("/api/health").json()["run_kind"] == "backtest"
 
 
 def test_summary_scales_with_power_and_reads_the_chosen_strategy(

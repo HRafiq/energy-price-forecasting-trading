@@ -46,10 +46,10 @@ import shutil
 import subprocess
 import time
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
@@ -217,8 +217,19 @@ def build_manifest(
     run_id: str,
     days: list[date],
     skipped: dict[date, str],
+    *,
+    run_kind: Literal["backtest", "live"] = "backtest",
+    issued_utc: str | None = None,
+    data_through: date | None = None,
 ) -> dict[str, Any]:
-    """Everything the dashboard needs to know about a run before reading its files."""
+    """Everything the dashboard needs to know about a run before reading its files.
+
+    ``run_kind`` is ``"backtest"`` for a replay of history and ``"live"`` for a run
+    the daily pipeline produced. A live run also carries ``issued_utc``, when it
+    issued its forecast, and ``data_through``, the last delivery day with published
+    prices, which can be behind the day it forecasts. A backtest leaves
+    ``issued_utc`` null and its prices run to its last day.
+    """
     holdout = settings.evaluation.holdout_start
     every_day = sorted(set(days) | set(skipped))
     try:
@@ -233,12 +244,15 @@ def build_manifest(
         commit = None
     return {
         "run_id": run_id,
+        "run_kind": run_kind,
         "created_utc": datetime.now(UTC).isoformat(timespec="seconds"),
+        "issued_utc": issued_utc,
         "source_commit": commit,
         "model": settings.forecasting.production_model,
         "baseline_model": BASELINE_MODEL,
         "first_day": str(every_day[0]),
         "last_day": str(every_day[-1]),
+        "data_through": str(data_through if data_through else every_day[-1]),
         "holdout_start": str(holdout),
         "timezone": settings.market.timezone,
         "forecast_issue_local": settings.market.forecast_issue_local,
@@ -545,7 +559,49 @@ def _remove_stale(folder: Path, name: str, label: str) -> None:
         print(f"health: removed the earlier copy of {name}", flush=True)
 
 
-def export_health(settings: Settings, run_dir: Path) -> dict[str, Any]:
+#: What a live run adds to the health folder: the day the pipeline actually ran.
+HEALTH_LIVE_DAY = "live_day.json"
+
+
+def _live_day_entry(
+    settings: Settings, folder: Path, day: date | None
+) -> dict[str, Any] | None:
+    """The pipeline's own record for ``day``, copied in beside the experiments.
+
+    A live export otherwise shows backtest artifacts under a live label. This is
+    the one file that says what today's run did: which chain step issued the
+    forecast, which registered model served it, what it committed and whether it
+    made the gate.
+    """
+    if day is None:
+        _remove_stale(folder, HEALTH_LIVE_DAY, f"pipeline/runs/{HEALTH_LIVE_DAY}")
+        return None
+    source = settings.data.processed_path / "pipeline" / "runs" / f"{day}.json"
+    label = f"pipeline/runs/{day}.json"
+    if not source.exists():
+        _remove_stale(folder, HEALTH_LIVE_DAY, label)
+        return None
+    record = json.loads(source.read_text(encoding="utf-8"))
+    summary = {
+        "target_day": record["target_day"],
+        "issued_utc": record["issued_utc"],
+        "on_time": record["on_time"],
+        "minutes_before_gate": record["minutes_before_gate"],
+        "step": record["step"],
+        "model": record["model"],
+        "model_version": record.get("model_version"),
+        "planned_value_eur": record["planned_value_eur"],
+        "readiness": record["readiness"],
+        "attempts": record["attempts"],
+        "incidents": record["incidents"],
+    }
+    write_json(summary, folder / HEALTH_LIVE_DAY)
+    return _source_entry(HEALTH_LIVE_DAY, source, label)
+
+
+def export_health(
+    settings: Settings, run_dir: Path, *, live_day: date | None = None
+) -> dict[str, Any]:
     """Copy the Model health sources into ``<run_dir>/health`` and index them.
 
     Each file is swapped in whole and ``index.json`` goes last. A missing source is
@@ -585,6 +641,9 @@ def export_health(settings: Settings, run_dir: Path) -> dict[str, Any]:
         files[HEALTH_INCIDENTS] = entry | {"records": len(incidents)}
     else:
         _remove_stale(folder, HEALTH_INCIDENTS, label)
+    live_entry = _live_day_entry(settings, folder, live_day)
+    if live_entry is not None:
+        files[HEALTH_LIVE_DAY] = live_entry
     index = {
         "exported_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "files": [files[name] for name in sorted(files)],
@@ -605,6 +664,23 @@ def main(argv: list[str] | None = None) -> int:
         "--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1)
     )
     parser.add_argument("--config", type=Path, default=None)
+    parser.add_argument(
+        "--run-kind",
+        choices=("backtest", "live"),
+        default="backtest",
+        help="a live run is one the daily pipeline produced, not a backtest",
+    )
+    parser.add_argument(
+        "--issued-utc",
+        default=None,
+        help="when a live run issued its forecast, ISO 8601",
+    )
+    parser.add_argument(
+        "--data-through",
+        type=date.fromisoformat,
+        default=None,
+        help="last delivery day whose prices are published",
+    )
     args = parser.parse_args(argv)
     if args.workers < 1:
         parser.error("--workers must be at least 1")
@@ -612,7 +688,23 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings(args.config)
     model = settings.forecasting.production_model
     forecasts = combined_forecasts(settings, model)
-    run_id = f"backtest-{max(forecasts['target_day'])}"
+    # A backtest run is named after the last day it covers. A live run is named
+    # after the day the pipeline produced it, which is later than the backtest
+    # forecasts it reads, so the two never collide and the name is not misleading.
+    last_forecast_day = max(forecasts["target_day"])
+    if args.run_kind == "live":
+        issued = (
+            pd.Timestamp(args.issued_utc)
+            if args.issued_utc
+            else pd.Timestamp.now(tz="UTC")
+        )
+        # The flag says UTC, so a value without a zone is read as UTC rather than
+        # raising. Airflow passes an aware timestamp; a person often does not.
+        if issued.tzinfo is None:
+            issued = issued.tz_localize("UTC")
+        run_id = f"live-{issued.tz_convert(settings.market.timezone).date()}"
+    else:
+        run_id = f"backtest-{last_forecast_day}"
     root = settings.data.processed_path / "dashboard"
     run_dir = root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -634,7 +726,16 @@ def main(argv: list[str] | None = None) -> int:
             run_dir / "feature_importance.json",
         )
         write_json(
-            build_manifest(settings, run_id, days, skipped), run_dir / "manifest.json"
+            build_manifest(
+                settings,
+                run_id,
+                days,
+                skipped,
+                run_kind=args.run_kind,
+                issued_utc=args.issued_utc,
+                data_through=args.data_through,
+            ),
+            run_dir / "manifest.json",
         )
         print("core files written", flush=True)
 
@@ -648,7 +749,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"grid written: {len(grid):,} rows", flush=True)
 
     if "health" in args.steps:
-        index = export_health(settings, run_dir)
+        # A live run points at the day the pipeline forecast, which is the day
+        # after the last published prices.
+        live_day = (
+            args.data_through + timedelta(days=1)
+            if args.run_kind == "live" and args.data_through
+            else None
+        )
+        index = export_health(settings, run_dir, live_day=live_day)
         print(f"health files written: {len(index['files'])}", flush=True)
 
     write_json({"run_id": run_id}, root / "latest.json")
