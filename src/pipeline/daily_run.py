@@ -10,15 +10,18 @@ the pipeline can also be run by hand, without Airflow:
 1. refuse any day before ``evaluation.live_from``, so a live run can never
    re-score the frozen hold-out;
 2. check the feeds (:mod:`src.pipeline.readiness`);
-3. take the model from the MLflow registry when one is registered, otherwise fit
-   the configured production model on the spot;
+3. refit and register the served model when it is due
+   (``pipeline.refit_every_days``), then take the model from the MLflow registry
+   when one is registered, otherwise fit the configured production model on the
+   spot;
 4. walk the fallback chain (:mod:`src.pipeline.chain`) and keep the first forecast
    it can make;
 5. save the forecast, commit the plan (:mod:`src.pipeline.plan`), and write the
    run record;
-6. write an incident whenever the chain had to step down, or the forecast missed
-   the gate. The command still exits 0: a schedule was committed either way, and
-   the lateness lives in the run record and the incident.
+6. write an incident whenever the chain had to step down, the forecast missed the
+   gate, or a refit that was due failed or had to wait for a feed. The command
+   still exits 0: a schedule was committed either way, and the lateness lives in
+   the run record and the incident.
 
 Settling is a separate call the next day, once the auction has published the
 prices the committed schedule will be paid.
@@ -29,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import traceback
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -52,7 +56,12 @@ from src.health.incidents import (
     upsert_incidents,
 )
 from src.pipeline.chain import STEPS, ChainResult, run_chain
-from src.pipeline.model_source import ModelSourceError, load_model
+from src.pipeline.model_source import (
+    ModelSourceError,
+    RefitOutcome,
+    load_model,
+    refresh_production_model,
+)
 from src.pipeline.plan import (
     Plan,
     load_plan,
@@ -168,6 +177,48 @@ def _model_from_registry(
     return model, version, ""
 
 
+def _scheduled_refit(
+    settings: Settings, target_day: date, inputs: pd.DataFrame, readiness: Readiness
+) -> RefitOutcome:
+    """The scheduled refit, which must never stop a schedule being committed."""
+    try:
+        return refresh_production_model(
+            settings, target_day, inputs, missing_feeds=readiness.missing
+        )
+    except Exception as exc:  # the served version, or the chain, still forecasts
+        traceback.print_exc()
+        return RefitOutcome(
+            "failed",
+            f"{type(exc).__name__}: {exc}; the served version, if any, stays",
+            previous_version=None,
+            served_version=None,
+        )
+
+
+def _refit_incident(
+    target_day: date, refit: RefitOutcome, issued_utc: datetime
+) -> Incident:
+    postponed = refit.status == "postponed"
+    return Incident(
+        incident_id=make_incident_id(SOURCE, "pipeline", target_day, "refit"),
+        delivery_day=target_day,
+        detected_utc=issued_utc.replace(microsecond=0),
+        type="pipeline",
+        severity="warning",
+        detail=(
+            f"Scheduled refit before {target_day} "
+            f"{'postponed' if postponed else 'failed'}: {refit.detail}"
+        ),
+        action=(
+            "Retried on the next day with every feed"
+            if postponed
+            else "Served version kept; inspect the refit before the next run"
+        ),
+        status="resolved" if postponed else "review",
+        source=SOURCE,
+    )
+
+
 def _chain_incident(
     record_day: date,
     result: ChainResult,
@@ -253,10 +304,8 @@ def run_day(
             f"a schedule for {target_day} exists at {committed} but its run record "
             f"{recorded} does not; inspect it, then rerun with --replace to redo it"
         )
-    issued_utc = now_utc or datetime.now(UTC)
     issue_day = target_day - timedelta(days=1)
     gate_utc = _clock_utc(issue_day, settings.market.gate_closure_local, settings)
-    on_time = issued_utc < gate_utc
 
     inputs = frame if frame is not None else pd.read_parquet(settings.data.inputs_path)
     readiness = check_readiness(inputs, target_day, settings)
@@ -264,16 +313,19 @@ def run_day(
     model: Forecaster | None = None
     version: str | None = None
     registry_note = "registry not used"
+    refit: RefitOutcome | None = None
     if use_registry:
+        refit = _scheduled_refit(settings, target_day, inputs, readiness)
         model, version, registry_note = _model_from_registry(settings)
 
     try:
         result = run_chain(inputs, target_day, settings, readiness, model=model)
     except ForecastError as exc:
+        failed_utc = now_utc or datetime.now(UTC)
         failure = Incident(
             incident_id=make_incident_id(SOURCE, "pipeline", target_day),
             delivery_day=target_day,
-            detected_utc=issued_utc.replace(microsecond=0),
+            detected_utc=failed_utc.replace(microsecond=0),
             type="pipeline",
             severity="critical",
             detail=f"Live run for {target_day} produced no forecast: {exc}",
@@ -283,6 +335,10 @@ def run_day(
         )
         upsert_incidents([failure], default_path(settings))
         raise
+    # Stamped once the forecast exists, after the refit and the chain, so the time
+    # they took counts against the gate; only the plan's own solve comes after it.
+    issued_utc = now_utc or datetime.now(UTC)
+    on_time = issued_utc < gate_utc
 
     _save_forecast(result.forecast, result.step, settings)
     step_minutes = int(
@@ -306,6 +362,10 @@ def run_day(
     save_plan(plan, settings)
 
     written: list[str] = []
+    if refit is not None and refit.status in ("failed", "postponed"):
+        refit_incident = _refit_incident(target_day, refit, issued_utc)
+        upsert_incidents([refit_incident], default_path(settings))
+        written.append(refit_incident.incident_id)
     if result.degraded or not on_time:
         incident = _chain_incident(
             target_day, result, readiness, issued_utc, on_time, settings
@@ -335,6 +395,7 @@ def run_day(
     )
     payload = record.as_dict()
     payload["registry"] = registry_note or f"model version {version}"
+    payload["refit"] = refit.as_dict() if refit is not None else None
     _write_json(payload, record_path(settings, target_day))
     return record
 
@@ -413,8 +474,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     print(json.dumps(record.as_dict(), indent=2))
     # A committed schedule is a success even when it was late: lateness is carried
-    # by the run record and its incident. Failing here would make the DAG run the
-    # fallback branch a second time for a day that already has a schedule.
+    # by the run record and its incident. Failing here would make Airflow retry a
+    # day that already has a schedule.
     return 0
 
 

@@ -17,7 +17,9 @@ recorded in the Phase 7 decisions entry; the D5 experiment keeps the order it wa
 frozen with, and its published numbers stand.
 
 Each step declares the feeds it needs, so a missing feed removes it from the chain
-before anything is fitted. A step that raises is recorded and the chain moves on.
+before anything is fitted. A step that raises is recorded and the chain moves on,
+and so is a step that runs past ``pipeline.step_time_limit_s``: it is abandoned
+(:mod:`src.pipeline.timelimit`) rather than left to hold the gate.
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ from src.forecasting.information import build_information_set
 from src.forecasting.models.common import feature_names
 from src.forecasting.production import build_production_model
 from src.pipeline.readiness import Readiness
+from src.pipeline.timelimit import run_with_time_limit
 
 __all__ = [
     "STEPS",
@@ -159,12 +162,17 @@ def run_chain(
     readiness: Readiness,
     *,
     model: Forecaster | None = None,
+    time_limit_s: float | None = None,
 ) -> ChainResult:
     """Walk the chain and return the first forecast that succeeds.
 
     ``model`` replaces the production rung with an already-fitted forecaster, which
     is how the pipeline serves a model from the registry. It is never refitted.
+    Each rung gets ``time_limit_s``, by default ``pipeline.step_time_limit_s``.
     """
+    limit = (
+        settings.pipeline.step_time_limit_s if time_limit_s is None else time_limit_s
+    )
     missing = set(readiness.missing)
     attempts: list[Attempt] = []
     for step in STEPS:
@@ -179,7 +187,8 @@ def run_chain(
             )
             continue
         started = time.perf_counter()
-        try:
+
+        def attempt(step: ChainStep = step) -> QuantileForecast:
             # A model handed in by the pipeline comes from the registry and is
             # already fitted; only a model this chain builds needs training.
             forecaster: Forecaster
@@ -192,11 +201,14 @@ def run_chain(
                         frame, target_day, settings, forecaster.fit_lookback_days
                     )
                 )
-            forecast = forecaster.forecast(
+            return forecaster.forecast(
                 build_information_set(
                     frame, target_day, settings, forecaster.lookback_days
                 )
             )
+
+        try:
+            forecast = run_with_time_limit(attempt, limit, step.name)
         except (ForecastError, ValueError) as exc:
             attempts.append(
                 Attempt(

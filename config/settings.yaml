@@ -211,3 +211,12 @@ trading:
   # always charged the battery's true wear, battery.degradation_eur_per_mwh.
   degradation_sweep_eur_per_mwh: [0, 2, 4, 8, 12, 16, 25]
 
+pipeline:
+  # The served model is refit every 28 days, the cadence every validation and
+  # hold-out backtest used (src/forecasting/run_comparison.py). Weekly refits
+  # improved pinball loss but not profit measurably (docs/results/m1_refit_cadence.md).
+  refit_every_days: 28
+  # A production fit takes about 8 s on this machine; a step still running after
+  # this long is abandoned and the chain moves on, so the gate is not missed.
+  step_time_limit_s: 120
+

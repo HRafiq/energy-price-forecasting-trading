@@ -40,3 +40,12 @@ def test_installing_the_agents_switches_the_dag_on_and_removing_them_off() -> No
     assert install.index("dags reserialize") < install.index("dags unpause $(DAG_ID)")
     assert '[ "$$paused" != "False" ]' in install
     assert "dags pause $(DAG_ID)" in remove
+
+
+def test_both_forecast_tasks_have_a_backstop_timeout() -> None:
+    for task, end in (
+        ('task_id="forecast"', 'task_id="forecast_late"'),
+        ('task_id="forecast_late"', 'task_id="export_dashboard"'),
+    ):
+        assert "execution_timeout=FORECAST_TIMEOUT" in _between(DAG, task, end)
+    assert "FORECAST_TIMEOUT = timedelta(minutes=15)" in DAG

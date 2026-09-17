@@ -28,6 +28,16 @@ artifact is loadable only next to this repository, because unpickling imports
 ``src.forecasting``; that is what a local single-repo pipeline needs, and the
 registry records the source commit so a version can be traced back.
 
+**Scheduled refits.** ``refresh_production_model`` is what the daily run calls
+before it forecasts. The served version is refit every ``pipeline.refit_every_days``
+days, counted from the first delivery day the version forecast, which is how the
+walk-forward backtests count their refits. A refit fits the production model for
+the day being forecast under ``pipeline.step_time_limit_s``, checks that it
+forecasts that day with finite quantiles, and only then registers it and moves the
+``production`` alias. A refit is postponed while any feed is missing, so a version is
+never fit on an incomplete day, and a refit that fails or times out leaves the
+served version in place; the daily run records both.
+
 Hold-out safety: the hold-out was scored once, through
 ``evaluation.holdout_last_day``. A model fit through day D is the model that
 forecasts D+1, so registering is refused whenever D+1 falls inside the hold-out
@@ -39,9 +49,12 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import time
+from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import mlflow
 import mlflow.pyfunc
@@ -56,6 +69,7 @@ from src.config import REPO_ROOT, Settings, load_settings
 from src.features.build import FEATURE_GROUPS
 from src.forecasting.base import (
     Forecaster,
+    ForecastError,
     QuantileForecast,
     make_forecast,
     quantile_columns,
@@ -68,6 +82,7 @@ from src.forecasting.models.common import (
 )
 from src.forecasting.models.gradient_boosting import LightGBMConformalModel
 from src.forecasting.production import build_production_model
+from src.pipeline.timelimit import run_with_time_limit
 
 __all__ = [
     "ARTIFACTS",
@@ -76,11 +91,15 @@ __all__ = [
     "REGISTERED_NAME",
     "TRACKING_URI",
     "ModelSourceError",
+    "RefitOutcome",
     "RegisteredForecaster",
     "load_model",
     "main",
+    "refit_due",
+    "refresh_production_model",
     "register_model",
     "registered_versions",
+    "served_version",
 ]
 
 #: The one registered model of this project: the production quantile forecaster.
@@ -247,16 +266,35 @@ def register_model(
     forecasts = fitted_through + timedelta(days=1)
     _refuse_holdout(settings, fitted_through, forecasts)
 
+    forecaster = _production_forecaster(settings, model)
+    inputs = pd.read_parquet(settings.data.inputs_path) if frame is None else frame
+    forecaster.fit(
+        build_information_set(inputs, forecasts, settings, forecaster.fit_lookback_days)
+    )
+    return _log_version(settings, forecaster, fitted_through, alias)
+
+
+def _production_forecaster(
+    settings: Settings, model: LightGBMConformalModel | None
+) -> LightGBMConformalModel:
     forecaster = model if model is not None else build_production_model(settings)
     if not isinstance(forecaster, LightGBMConformalModel):
         raise ModelSourceError(
             f"the registry serialises {LightGBMConformalModel.__name__} only; "
             f"forecasting.production_model is {settings.forecasting.production_model}"
         )
-    inputs = pd.read_parquet(settings.data.inputs_path) if frame is None else frame
-    forecaster.fit(
-        build_information_set(inputs, forecasts, settings, forecaster.fit_lookback_days)
-    )
+    return forecaster
+
+
+def _log_version(
+    settings: Settings,
+    forecaster: LightGBMConformalModel,
+    fitted_through: date,
+    alias: str,
+) -> str:
+    """Log a fitted model, register it and point ``alias`` at the new version."""
+    forecasts = fitted_through + timedelta(days=1)
+    _refuse_holdout(settings, fitted_through, forecasts)
     wrapper = _ConformalPyfunc(forecaster)
 
     _activate_store()
@@ -331,6 +369,145 @@ def load_model(
         )
     version = str(registered.version)
     return RegisteredForecaster(settings, loaded, wrapper, version), version
+
+
+def served_version(
+    settings: Settings, *, alias: str = "production"
+) -> tuple[str, date] | None:
+    """The version behind ``alias`` and the first delivery day it forecast.
+
+    ``settings`` is taken so every entry point of this module reads the same.
+    """
+    _activate_store()
+    client = MlflowClient()
+    try:
+        registered = client.get_model_version_by_alias(REGISTERED_NAME, alias)
+    except MlflowException:
+        return None
+    params = client.get_run(registered.run_id).data.params if registered.run_id else {}
+    if "forecasts_from" not in params:
+        raise ModelSourceError(
+            f"{REGISTERED_NAME} version {registered.version} does not record the day "
+            "it forecasts from, so its age is unknown"
+        )
+    return str(registered.version), date.fromisoformat(params["forecasts_from"])
+
+
+def refit_due(forecasts_from: date | None, target_day: date, every_days: int) -> bool:
+    """Whether the served model is due a refit before forecasting ``target_day``.
+
+    The walk-forward refits on the first day and then on any day at least
+    ``every_days`` after the last refit, so this does the same.
+    """
+    return forecasts_from is None or (target_day - forecasts_from).days >= every_days
+
+
+@dataclass(frozen=True)
+class RefitOutcome:
+    """What the scheduled refit did before one live day was forecast."""
+
+    status: Literal["not_due", "refitted", "postponed", "failed"]
+    detail: str
+    previous_version: str | None
+    served_version: str | None
+    seconds: float = 0.0
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "detail": self.detail,
+            "previous_version": self.previous_version,
+            "served_version": self.served_version,
+            "seconds": round(self.seconds, 3),
+        }
+
+
+def _stays(version: str | None) -> str:
+    return (
+        f"version {version} stays"
+        if version
+        else "nothing is registered, so the chain fits a model on the spot"
+    )
+
+
+def refresh_production_model(
+    settings: Settings,
+    target_day: date,
+    frame: pd.DataFrame,
+    *,
+    missing_feeds: Sequence[str] = (),
+    alias: str = "production",
+    model: LightGBMConformalModel | None = None,
+) -> RefitOutcome:
+    """Refit and register the served model if it is due, before ``target_day``.
+
+    ``model`` replaces the configured production model, for tests. A refit that
+    fails, times out or forecasts non-finite quantiles is not registered, and the
+    served version stays.
+    """
+    started = time.perf_counter()
+    every = settings.pipeline.refit_every_days
+    current = served_version(settings, alias=alias)
+    previous, forecasts_from = current if current is not None else (None, None)
+    if not refit_due(forecasts_from, target_day, every):
+        assert forecasts_from is not None
+        due = forecasts_from + timedelta(days=every)
+        return RefitOutcome(
+            "not_due",
+            f"version {previous} forecasts from {forecasts_from}; the next refit is "
+            f"due for delivery day {due}",
+            previous,
+            previous,
+        )
+    if missing_feeds:
+        return RefitOutcome(
+            "postponed",
+            f"refit due but feeds are missing: {', '.join(sorted(missing_feeds))}; "
+            f"{_stays(previous)} until a day with every feed",
+            previous,
+            previous,
+            time.perf_counter() - started,
+        )
+    fitted_through = target_day - timedelta(days=1)
+    try:
+        _refuse_holdout(settings, fitted_through, target_day)
+        forecaster = _production_forecaster(settings, model)
+        limit = settings.pipeline.step_time_limit_s
+        run_with_time_limit(
+            lambda: forecaster.fit(
+                build_information_set(
+                    frame, target_day, settings, forecaster.fit_lookback_days
+                )
+            ),
+            limit,
+            "refit",
+        )
+        check = forecaster.forecast(
+            build_information_set(frame, target_day, settings, forecaster.lookback_days)
+        )
+        values = check.values.to_numpy(dtype="float64")
+        if values.size == 0 or not np.isfinite(values).all():
+            raise ModelSourceError(
+                f"the refit model forecast {target_day} with missing or non-finite "
+                "quantiles"
+            )
+        version = _log_version(settings, forecaster, fitted_through, alias)
+    except (ForecastError, ModelSourceError, MlflowException, ValueError) as exc:
+        return RefitOutcome(
+            "failed",
+            f"{type(exc).__name__}: {exc}; {_stays(previous)}",
+            previous,
+            previous,
+            time.perf_counter() - started,
+        )
+    replaced = f"replaces version {previous}" if previous else "is the first version"
+    return RefitOutcome(
+        "refitted",
+        f"version {version} fitted through {fitted_through} {replaced}",
+        previous,
+        version,
+        time.perf_counter() - started,
+    )
 
 
 def registered_versions(settings: Settings) -> list[dict[str, str]]:
