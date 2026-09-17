@@ -1105,3 +1105,13 @@ def test_narrate_names_the_figures_from_both_refused_drafts_once_each(
 
     assert body["attempts"] == 2 and body["provider"] == "template"
     assert body["rejected"] == ["4,242.42", "5,151.51"]
+
+
+def test_live_incidents_are_labelled_by_what_produced_them() -> None:
+    from api.health import provenance
+
+    assert provenance("observed") == "observed"
+    assert provenance("pipeline") == "observed"
+    assert provenance("m2_drift") == provenance("live_drift") == "measured"
+    assert provenance("d5_deadline") == "simulated"
+    assert provenance("something_new") == "simulated"

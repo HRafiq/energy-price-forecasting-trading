@@ -28,6 +28,8 @@ const SEVERITY_COLOR: Record<Incident["severity"], string> = {
 /** Readable names of the sources that write incidents. */
 const SOURCE_NAMES: Record<string, string> = {
   m2_drift: "drift monitor",
+  live_drift: "live drift monitor",
+  pipeline: "live pipeline",
   d5_deadline: "D5 deadline",
 };
 
@@ -39,10 +41,10 @@ function typeLabel(type: string): string {
   return TYPE_LABELS[type as IncidentType] ?? type;
 }
 
-/** "observed", "measured: drift monitor", "simulated: D5 deadline". */
+/** "observed", "observed: live pipeline", "measured: drift monitor", "simulated: D5 deadline". */
 export function sourceLabel(source: string, provenance: Provenance | undefined): string {
   const category = provenance ?? (source === "observed" ? "observed" : "simulated");
-  if (category === "observed") return "observed";
+  if (source === "observed") return "observed";
   return `${category}: ${SOURCE_NAMES[source] ?? source.replace(/_/g, " ")}`;
 }
 
@@ -133,7 +135,7 @@ export function IncidentLog({ run }: { run: string }) {
   const loadingMore = busy && offset > 0;
 
   const legend =
-    "observed: fixed rules over saved backtest outputs; measured: the drift monitor over real saved forecasts; simulated: failures injected in the D5 experiment";
+    "observed: fixed rules over saved backtest outputs, and the live pipeline's own runs; measured: the drift monitor over real saved forecasts, in M2 and live; simulated: failures injected in the D5 experiment";
   let sub = `Newest first · ${legend}`;
   if (data) {
     const filtered = type || source ? " matching the filters" : "";

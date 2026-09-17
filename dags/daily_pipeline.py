@@ -27,7 +27,11 @@ Timing, for delivery day D+1 forecast on day D:
   the schedule was committed late, and leaves the run green so the missed gate is
   reported once, in the health log;
 * ``settle_yesterday`` values the schedule committed a day earlier, once the
-  auction has published its prices.
+  auction has published its prices;
+* ``check_drift`` runs the drift monitor on every settled day the production model
+  forecast, with the thresholds fixed on validation, and writes a drift incident
+  when an alert starts. The export ran earlier in the same run, so the dashboard
+  shows a new alert from the next day.
 """
 
 from __future__ import annotations
@@ -146,5 +150,12 @@ with DAG(
         retries=1,
     )
 
+    drift = BashOperator(
+        task_id="check_drift",
+        bash_command=f"{RUN} src.pipeline.drift_check --through {YESTERDAY}",
+        trigger_rule=TriggerRule.ALL_DONE,
+        retries=1,
+    )
+
     [prices, weather, fuels] >> inputs >> wait
-    wait >> [forecast, forecast_late] >> export >> check >> settle
+    wait >> [forecast, forecast_late] >> export >> check >> settle >> drift

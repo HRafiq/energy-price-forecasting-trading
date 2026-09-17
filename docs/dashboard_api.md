@@ -254,12 +254,14 @@ records matching all filters by provenance, and `source_provenance` maps each so
 its category.
 
 Each record carries `provenance`: `observed` for `source` `observed` (fixed rules over
-saved backtest outputs), `measured` for `m2_drift` (drift alerts measured on the real
-saved forecasts) and `simulated` for `d5_deadline` (failure injection); a source outside
-these explicit sets counts as `simulated`. `in_sample` is `true` when
-`metrics.in_sample` is 1 (the delivery day lies in the validation window the threshold
-was fitted on), `false` when it is 0 and `null` when the record does not say. The tab
-shows "observed", "measured: drift monitor" or "simulated: D5 deadline", with an
+saved backtest outputs) and `pipeline` (the live pipeline's own runs), `measured` for
+`m2_drift` and `live_drift` (drift alerts measured on real saved forecasts, in the M2
+experiment and in the live pipeline's daily check) and `simulated` for `d5_deadline`
+(failure injection); a source outside these explicit sets counts as `simulated`.
+`in_sample` is `true` when `metrics.in_sample` is 1 (the delivery day lies in the
+validation window the threshold was fitted on), `false` when it is 0 and `null` when the
+record does not say. The tab shows "observed", "observed: live pipeline", "measured:
+drift monitor", "measured: live drift monitor" or "simulated: D5 deadline", with an
 "in-sample" tag.
 
 ```json

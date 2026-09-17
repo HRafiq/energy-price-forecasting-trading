@@ -314,8 +314,17 @@ def drift_incidents(
     thresholds: Thresholds,
     timezone: str,
     window_days: int = WINDOW_DAYS,
+    source: str = SOURCE,
+    days_word: str = "traded days",
 ) -> list[Incident]:
-    """One drift incident per alert episode, dated on its first alert day."""
+    """One drift incident per alert episode, dated on its first alert day.
+
+    ``source`` names the monitor that raised it: the M2 experiment by default, or
+    the live pipeline's daily check, which counts ``days_word`` as scored days
+    because it leaves out traded days a fallback forecast. ``detected_utc`` is the
+    local midnight after the first alert day, as a batch run after delivery would
+    see it; the live check replaces it with the time of the run that found it.
+    """
     incidents = []
     for episode in episodes:
         detected = (
@@ -325,7 +334,7 @@ def drift_incidents(
             .to_pydatetime()
         )
         span = (
-            f"still in alert on the last traded day, {episode.end}"
+            f"still in alert on the last {days_word.removesuffix('s')}, {episode.end}"
             if episode.open_at_end
             else f"it lasted to {episode.end}"
         )
@@ -334,8 +343,8 @@ def drift_incidents(
             detail = (
                 f"Rolling {window_days}-day 90% interval coverage was "
                 f"{episode.first_value:.1%} on {episode.start}, below the alert "
-                f"threshold of {threshold:.1%}. The alert ran {episode.days} traded "
-                f"days ({span}); lowest {episode.extreme_value:.1%} on "
+                f"threshold of {threshold:.1%}. The alert ran {episode.days} "
+                f"{days_word} ({span}); lowest {episode.extreme_value:.1%} on "
                 f"{episode.extreme_day}."
             )
         else:
@@ -345,7 +354,7 @@ def drift_incidents(
                 f"{episode.first_value:.3f} times its validation median "
                 f"({thresholds.pinball_median:.2f} €/MWh) on {episode.start}, above "
                 f"the alert threshold of {threshold:.2f}. The alert ran "
-                f"{episode.days} traded days ({span}); highest "
+                f"{episode.days} {days_word} ({span}); highest "
                 f"{episode.extreme_value:.2f} on {episode.extreme_day}."
             )
         in_sample = episode.window == "validation"
@@ -354,7 +363,7 @@ def drift_incidents(
         incidents.append(
             Incident(
                 incident_id=make_incident_id(
-                    SOURCE, "drift", episode.start, episode.signal
+                    source, "drift", episode.start, episode.signal
                 ),
                 delivery_day=episode.start,
                 detected_utc=detected,
@@ -363,7 +372,7 @@ def drift_incidents(
                 detail=detail,
                 action="Flag for retraining review",
                 status="review",
-                source=SOURCE,
+                source=source,
                 metrics={
                     "threshold": threshold,
                     "first_value": episode.first_value,

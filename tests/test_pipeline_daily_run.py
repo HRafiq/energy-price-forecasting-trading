@@ -278,9 +278,18 @@ def test_the_deadline_check_reports_only_a_late_run(
         replace=True,
     )
     assert not late.on_time
+
+    def real_settings(config: object = None) -> Settings:
+        raise AssertionError("the deadline check read the real settings")
+
+    # The incident must go to the log of the settings it was given, never the
+    # repository's own.
+    monkeypatch.setattr(dr, "load_settings", real_settings)
     assert dr.check_deadline(local, LIVE_DAY) is False
-    kinds = [i.type for i in load_incidents(default_path(local))]
-    assert kinds.count("pipeline") == 1
+    logged = load_incidents(default_path(local))
+    # The late run's own incident, and one from the deadline check, in this log.
+    assert [i.type for i in logged].count("pipeline") == 2
+    assert sum("passed its deadline" in i.detail for i in logged) == 1
 
     with pytest.raises(FileNotFoundError, match="no run record"):
         dr.check_deadline(local, date(2026, 9, 20))

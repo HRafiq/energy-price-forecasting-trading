@@ -49,3 +49,11 @@ def test_both_forecast_tasks_have_a_backstop_timeout() -> None:
     ):
         assert "execution_timeout=FORECAST_TIMEOUT" in _between(DAG, task, end)
     assert "FORECAST_TIMEOUT = timedelta(minutes=15)" in DAG
+
+
+def test_the_drift_check_runs_after_settling_on_the_settled_day() -> None:
+    task = _between(DAG, 'task_id="check_drift"', "[prices, weather, fuels]")
+    assert "src.pipeline.drift_check --through {YESTERDAY}" in task
+    assert "settle >> drift" in DAG
+    drift = _between(MAKEFILE, "\ndrift:", "\ntest:")
+    assert "src.pipeline.drift_check --through $(DAY)" in drift

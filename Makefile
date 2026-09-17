@@ -14,7 +14,7 @@ AIRFLOW_ENV := AIRFLOW_HOME=$(CURDIR)/airflow_home \
 AIRFLOW := $(AIRFLOW_ENV) $(CURDIR)/.venv-airflow/bin/airflow
 SUITES := validation decision-value synthetic degradation attribution
 
-.PHONY: help setup data entsoe forecast backtest holdout report figures export api web dashboard health experiments mlflow airflow airflow-setup pipeline settle test launchd-install launchd-uninstall
+.PHONY: help setup data entsoe forecast backtest holdout report figures export api web dashboard health experiments mlflow airflow airflow-setup pipeline settle drift test launchd-install launchd-uninstall
 
 help:
 	@echo "setup     install dependencies with uv"
@@ -38,6 +38,7 @@ help:
 	@echo "launchd-uninstall  remove those two launchd agents"
 	@echo "pipeline  one live run without Airflow: make pipeline DAY=2026-09-17"
 	@echo "settle    value the schedule committed for a day: make settle DAY=2026-09-16"
+	@echo "drift     run the drift monitor on the live record: make drift DAY=2026-09-16"
 	@echo "test      lint, type checks and tests"
 
 setup:
@@ -119,6 +120,9 @@ pipeline:
 
 settle:
 	$(UV) python -m src.pipeline.daily_run --day $(DAY) --settle
+
+drift:
+	$(UV) python -m src.pipeline.drift_check --through $(DAY)
 
 test:
 	$(UV) ruff check .

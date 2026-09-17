@@ -523,7 +523,7 @@ Phase 8 and the briefing work after it add two M5 entries, the live runs add a D
 entry on the day being forecast, and a follow-up to M1 asks whether weekly refits pay.
 The T1 follow-ups sit with T1 above.
 
-## M2 · Drift monitoring (Phase 6: measured)
+## M2 · Drift monitoring (Phase 6: measured, live: running daily)
 
 **What breaks:** a model loses calibration gradually. Its ranges stop holding the
 realised price, and nobody notices until profit falls.
@@ -547,11 +547,17 @@ incident for retraining review, 9 in total; 5 of them fall in the validation win
 whose days set the thresholds, so they are in-sample.
 
 **Mitigation:** run both signals. On the hold-out the pinball ratio alerted first, but
-that is one observation: on validation the longest coverage alert, 28 days from 20
-March 2026, came with no pinball alert at all. A coverage threshold chosen on a window
-that contains its own deep dip reacts late. The live pipeline does not run the monitor
-yet; the dashboard shows the saved validation and hold-out result. When it does, which
-signal leads should be decided on validation episodes, not on the hold-out.
+that is one observation: on validation the longest coverage alert, 28 days from 20 March
+2026, came with no pinball alert at all. A coverage threshold chosen on a window that
+contains its own deep dip reacts late. The live pipeline now runs the monitor every day
+after settling, with these thresholds unchanged, on settled days the production model
+forecast; fallback days are skipped because the thresholds describe the production
+model's ranges. It needs 28 such days before it can alert, and the window is not filled
+with hold-out forecasts. An alert writes a drift incident for retraining review and does
+not trigger an early refit, a rule that was never backtested. The dashboard's drift
+panel still shows the saved validation and hold-out result; live alerts reach it only as
+incidents. Which signal leads should still be decided on validation episodes, not on the
+hold-out.
 
 ---
 
@@ -639,14 +645,15 @@ late data, 19 pipeline.
 
 **Mitigation:** the chain itself. Phase 7 builds it as the Airflow sensor and branch.
 Every model fit and every rung of the chain now runs under a time limit,
-`pipeline.step_time_limit_s`, 120 s against the 8 s a production fit takes: a step
-still running is abandoned and the chain moves on. The registry calls and file reads
-around those steps have no limit of their own; only the forecast task's 15-minute
-Airflow timeout covers them, and a kill late in the morning could still miss the gate. One change was decided on validation profit:
-the live chain puts seasonal naive ahead of naive previous day, because it earned
-€132,292 against €128,836 on the same 730 days, 79.7% of perfect foresight against
-77.6%, although its pinball loss is worse, 11.49 against 9.61. The experiment above
-keeps the order it was frozen with, so its numbers stand as reported.
+`pipeline.step_time_limit_s`, 120 s against the 8 s a production fit takes: a step still
+running is abandoned and the chain moves on. The registry calls and file reads around
+those steps have no limit of their own; only the forecast task's 15-minute Airflow
+timeout covers them, and a kill late in the morning could still miss the gate. One
+change was decided on validation profit: the live chain puts seasonal naive ahead of
+naive previous day, because it earned €132,292 against €128,836 on the same 730 days,
+79.7% of perfect foresight against 77.6%, although its pinball loss is worse, 11.49
+against 9.61. The experiment above keeps the order it was frozen with, so its numbers
+stand as reported.
 
 **Built in Phase 7:** the chain is no longer only a simulation. The daily pipeline runs
 it for real: a readiness check reports each feed separately, the chain steps down when

@@ -492,18 +492,20 @@ def check_deadline(settings: Settings, day: date) -> bool:
     record = json.loads(path.read_text(encoding="utf-8"))
     if bool(record["on_time"]):
         return True
-    deadline_missed(str(day))
+    deadline_missed(str(day), settings)
     return False
 
 
-def deadline_missed(target_day: str | None = None) -> str:
+def deadline_missed(
+    target_day: str | None = None, settings: Settings | None = None
+) -> str:
     """Record that a run did not finish before its deadline.
 
     The DAG's deadline task calls it through ``check_deadline`` when a run was not
     on time. It writes a pipeline incident so a missed deadline appears in the Model
     health log beside the fallbacks, rather than only in the scheduler's own history.
     """
-    settings = load_settings()
+    settings = settings or load_settings()
     day = date.fromisoformat(target_day) if target_day else date.today()
     detected = datetime.now(UTC).replace(microsecond=0)
     incident = Incident(
