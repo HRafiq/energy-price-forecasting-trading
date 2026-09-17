@@ -67,6 +67,8 @@ The production model is close to calibrated with slightly narrow tails: its 90% 
 
 I froze every choice on the validation window before trading the hold-out, 1 June to 14 September 2026, once. Against the same summer months of validation, 94.3%, the hold-out came in 3.4 points lower.
 
+Where the money is lost: about 40% of the gap to perfect foresight falls between 15:00 and 21:00 local time. Within that window the loss sits later in summer, so the 18:00 to 21:00 evening block takes 35% of the summer gap but only 16% in winter. Anchoring the window to sunset instead of the clock explains no measurably more of the loss.
+
 ### The decision-value experiment
 
 ![Forecast accuracy against captured profit for eight forecasters](docs/img/decision_value.png)

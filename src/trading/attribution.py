@@ -54,6 +54,14 @@ solved once and cached.
 Local hours come from converting each period to the market time zone. On the
 autumn DST day the repeated 02:00 hour stays in block 00-05, which then holds
 seven hours (28 quarter-hours); on the spring day it holds five.
+
+Other windows
+-------------
+The clock blocks are the default. A ``Windows`` scheme groups the periods any other
+way, for example relative to sunrise and sunset, and the Shapley split runs
+unchanged over its windows. The ``block`` column then holds the window names. A
+scheme should keep every period of an hourly product in one window, or correcting
+a group would change part of a product's hour.
 """
 
 from __future__ import annotations
@@ -61,9 +69,11 @@ from __future__ import annotations
 import hashlib
 import itertools
 import time
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
+from functools import partial
 
 import numpy as np
 import pandas as pd
@@ -89,8 +99,10 @@ __all__ = [
     "HOUR_BLOCKS",
     "Attribution",
     "DayAttribution",
+    "Windows",
     "attribute_day",
     "attribute_days",
+    "clock_windows",
     "counterfactual_frame",
     "counterfactual_pnl",
     "error_directions",
@@ -147,8 +159,9 @@ _NO_DIRECTION = ""
 class DayAttribution:
     """The gap to perfect foresight of one strategy on one day, split by errors.
 
-    ``costs`` has one row per (block, direction) in ``HOUR_BLOCKS`` x
-    ``DIRECTIONS`` order, with columns ``block``, ``direction``, ``periods`` (how
+    ``costs`` has one row per (block, direction) in window x ``DIRECTIONS``
+    order, the windows being ``HOUR_BLOCKS`` unless another scheme was given,
+    with columns ``block``, ``direction``, ``periods`` (how
     many quarter-hours had that error direction in that block),
     ``mean_abs_error_eur_mwh`` (NaN when there are none) and ``cost_eur``, the
     Shapley share. A group without periods is not a player and costs exactly 0.
@@ -192,6 +205,31 @@ class Attribution:
     costs: pd.DataFrame
     days: pd.DataFrame
     failed: dict[date, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Windows:
+    """How the periods of a day are grouped before the Shapley split.
+
+    ``names`` lists the windows in display order; ``label`` gives every period of a
+    day's index its window name. Days run in worker processes, so ``label`` must be
+    a module-level function or a ``functools.partial`` of one.
+    """
+
+    names: tuple[str, ...]
+    label: Callable[[pd.DatetimeIndex], NDArray[np.str_]]
+
+    def __post_init__(self) -> None:
+        if len(set(self.names)) != len(self.names):
+            raise ValueError("window names must be unique")
+
+
+def clock_windows(timezone: str) -> Windows:
+    """The default scheme: the local hour blocks of ``HOUR_BLOCKS``."""
+    return Windows(
+        names=tuple(name for name, _ in HOUR_BLOCKS),
+        label=partial(local_hour_blocks, timezone=timezone),
+    )
 
 
 def local_hour_blocks(index: pd.DatetimeIndex, timezone: str) -> NDArray[np.str_]:
@@ -312,8 +350,11 @@ def attribute_day(
     ceiling_pnl_eur: float | None = None,
     permutations: int = 4,
     exact_max_players: int = 4,
+    windows: Windows | None = None,
 ) -> DayAttribution:
     """Split one day's gap to perfect foresight into Shapley shares per group.
+
+    ``windows`` groups the periods; the local clock blocks when it is not given.
 
     ``ceiling_pnl_eur`` may carry perfect foresight's settled P&L for this same
     day, already solved, so several strategies share one ceiling solve. Raises
@@ -337,13 +378,19 @@ def attribute_day(
         fixed_solves += 1
 
     realised = day[REALISED].to_numpy(dtype=float)
-    blocks = local_hour_blocks(pd.DatetimeIndex(day.index), timezone)
+    scheme = windows or clock_windows(timezone)
+    blocks = np.asarray(scheme.label(pd.DatetimeIndex(day.index)), dtype=np.str_)
+    unknown = sorted(set(blocks.tolist()) - set(scheme.names))
+    if unknown:
+        raise ValueError(f"periods labelled outside the windows: {unknown}")
     products = product_blocks(pd.DatetimeIndex(day.index), day[PRODUCT])
+    if (pd.Series(blocks).groupby(pd.Series(products)).nunique() > 1).any():
+        raise ValueError("the window scheme splits a day-ahead product between windows")
     directions = product_directions(day[error_column], day[REALISED], products)
     abs_error = np.abs(day[error_column].to_numpy(dtype=float) - realised)
     groups = [
         (block, direction, (blocks == block) & (directions == direction))
-        for block, _ in HOUR_BLOCKS
+        for block in scheme.names
         for direction in DIRECTIONS
     ]
     player_groups = [i for i, (_, _, mask) in enumerate(groups) if mask.any()]
@@ -453,6 +500,7 @@ class _DayJob:
     time_limit_s: float
     permutations: int
     exact_max_players: int
+    windows: Windows | None = None
 
 
 def _attribute_day_job(job: _DayJob) -> tuple[list[DayAttribution], str | None]:
@@ -472,6 +520,7 @@ def _attribute_day_job(job: _DayJob) -> tuple[list[DayAttribution], str | None]:
                 ceiling_pnl_eur=ceiling.settlement.pnl_eur,
                 permutations=job.permutations,
                 exact_max_players=job.exact_max_players,
+                windows=job.windows,
             )
             for strategy in job.strategies
         ]
@@ -494,6 +543,7 @@ def attribute_days(
     permutations: int = 4,
     exact_max_players: int = 4,
     allow_holdout: bool = False,
+    windows: Windows | None = None,
 ) -> Attribution:
     """Attribute every forecast strategy's gap on every day in ``days``.
 
@@ -525,6 +575,7 @@ def attribute_days(
             time_limit_s=time_limit_s,
             permutations=permutations,
             exact_max_players=exact_max_players,
+            windows=windows,
         )
         for day, frame in forecasts.groupby("target_day")
         if day in wanted

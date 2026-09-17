@@ -290,6 +290,46 @@ October 2025 an hourly product takes the direction of its mean error.
 
 ---
 
+## T1 · Late afternoon, not just the evening (validation: measured)
+
+**Question:** the T1 table shows the 18:00 to 20:59 block taking 35% of the validation
+gap from June to September but 16% from October to May, while 15:00 to 17:59 moves the
+other way, 8% against 23%. Does the loss follow sunset, which comes more than four hours
+earlier in December than in June, rather than the clock?
+
+**Measured:** the same Shapley split of the production model's median-dispatch gap,
+€16,424 over 730 validation days, repeated with windows anchored to each day's sunrise
+and sunset at the centre of Germany, boundaries rounded to the whole hour so an hourly
+product is never split. Both splits give identical per-day gaps. Two criteria were fixed
+before the run and both passed on the estimates: the sunset window's share of the gap
+differs between June to September and October to May by 7.0 points, under the limit of
+10, and it takes 41.3% of the whole gap against 39.8% for the six hours of the 15-17 and
+18-20 clock blocks. On 70 June and July days the window after sunset is cut at the end of
+the delivery day, so the sunset window holds five hours, which lowers its summer share.
+(docs/results/t1_sunset.md)
+
+**Added after the run:** the criteria compared point estimates, and the intervals show
+they cannot decide the question. The sunset window's 1.5-point lead over the clock
+window has a 95% interval of -4.3 to +6.5 points, and the seasonal differences of both
+windows have intervals about 25 to 40 points wide that include zero (moving-block
+bootstrap over weeks). The data cannot tell sunset from the clock, and the claim that
+the losses follow sunset is not made.
+
+**What is clear:** about 40% of the gap is lost between 15:00 and 21:00, 43% from June to
+September and 39% from October to May, though the difference between those two is not
+pinned down. Within that window the loss shifts with the season beyond noise. On the
+clock, 18:00 to 20:59 takes 19.6 points more of the gap in summer (95% interval +5.2 to
++39.9) and 15:00 to 17:59 takes 15.7 points less (-28.2 to -2.9). Against sunset the
+shift runs the other way: the three hours before sunset take 20.8 points more in summer
+and the three hours after it 27.8 points less.
+
+**What it changes:** a fix aimed at the 18:00 to 21:00 evening peak alone would target a
+block that carries 16% of the winter gap. The window to target is 15:00 to 21:00.
+
+**In my words:** _to write_
+
+---
+
 ## T2 · Error cost is not error size (Phase 4: measured)
 
 **What breaks:** judging a forecaster by its average error. A battery's profit
@@ -400,7 +440,8 @@ catch, with an alert when rolling 90% coverage falls below its threshold.
 ---
 
 Phase 6 adds M2, M1, D1 and D5 below; Phase 8 adds M5; the live runs add a second
-D1 entry, on the day being forecast; and a follow-up to M1 tests weekly refits.
+D1 entry, on the day being forecast; and follow-ups to T1 and M1 ask whether the
+losses follow sunset and whether weekly refits pay.
 
 ## M2 · Drift monitoring (Phase 6: measured)
 

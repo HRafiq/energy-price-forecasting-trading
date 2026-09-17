@@ -9,7 +9,9 @@ a full hour at 1 MW moves exactly 1 MWh.
 
 from __future__ import annotations
 
+import pickle
 from datetime import date, timedelta
+from functools import partial
 
 import numpy as np
 import pandas as pd
@@ -24,8 +26,10 @@ from src.trading.attribution import (
     DIRECTIONS,
     HOUR_BLOCKS,
     DayAttribution,
+    Windows,
     attribute_day,
     attribute_days,
+    clock_windows,
     counterfactual_frame,
     counterfactual_pnl,
     local_hour_blocks,
@@ -499,3 +503,75 @@ def test_hourly_products_take_the_direction_of_their_mean_error() -> None:
         "under",
         "under",
     ]
+
+
+def _evening_or_rest(index: pd.DatetimeIndex, timezone: str) -> NDArray[np.str_]:
+    hours = index.tz_convert(timezone).hour
+    return np.where((hours >= 17) & (hours < 20), "evening", "rest").astype(np.str_)
+
+
+def test_the_default_windows_are_the_clock_blocks(settings: Settings) -> None:
+    tz = settings.market.timezone
+    day = shaped_day(settings, DAY, seed=3)
+
+    default = attribute_day(day, MEDIAN_FORECAST, SIMPLE, timezone=tz)
+    explicit = attribute_day(
+        day, MEDIAN_FORECAST, SIMPLE, timezone=tz, windows=clock_windows(tz)
+    )
+
+    pd.testing.assert_frame_equal(default.costs, explicit.costs)
+
+
+def test_a_custom_scheme_splits_the_gap_by_its_own_windows(settings: Settings) -> None:
+    tz = settings.market.timezone
+    scheme = Windows(
+        names=("rest", "evening"), label=partial(_evening_or_rest, timezone=tz)
+    )
+
+    result = attribute_day(
+        spike_day(settings), MEDIAN_FORECAST, SIMPLE, timezone=tz, windows=scheme
+    )
+
+    assert list(dict.fromkeys(result.costs["block"])) == ["rest", "evening"]
+    assert cost(result.costs, "evening", "under") == pytest.approx(95.0, abs=1e-6)
+    np.testing.assert_allclose(other_costs(result.costs, ("evening", "under")), 0.0)
+    assert_adds_up(result)
+
+
+def test_a_period_labelled_outside_the_windows_is_refused(settings: Settings) -> None:
+    tz = settings.market.timezone
+    scheme = Windows(names=("rest",), label=partial(_evening_or_rest, timezone=tz))
+
+    with pytest.raises(ValueError, match="outside the windows"):
+        attribute_day(
+            spike_day(settings), MEDIAN_FORECAST, SIMPLE, timezone=tz, windows=scheme
+        )
+
+
+def test_a_scheme_survives_the_trip_to_a_worker_process() -> None:
+    scheme = clock_windows("Europe/Berlin")
+
+    restored = pickle.loads(pickle.dumps(scheme))
+
+    assert restored.names == scheme.names
+    index = pd.date_range("2025-11-20", periods=4, freq="6h", tz="UTC")
+    np.testing.assert_array_equal(restored.label(index), scheme.label(index))
+
+
+def _first_half_hour(index: pd.DatetimeIndex) -> NDArray[np.str_]:
+    return np.where(index.minute < 30, "early", "late").astype(np.str_)
+
+
+def test_a_scheme_that_splits_an_hourly_product_is_refused(settings: Settings) -> None:
+    tz = settings.market.timezone
+    day = spike_day(settings)
+    day["price_product_minutes"] = 60
+    scheme = Windows(names=("early", "late"), label=_first_half_hour)
+
+    with pytest.raises(ValueError, match="splits a day-ahead product"):
+        attribute_day(day, MEDIAN_FORECAST, SIMPLE, timezone=tz, windows=scheme)
+
+
+def test_window_names_must_be_unique() -> None:
+    with pytest.raises(ValueError, match="unique"):
+        Windows(names=("early", "early"), label=_first_half_hour)
