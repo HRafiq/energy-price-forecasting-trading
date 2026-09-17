@@ -57,7 +57,7 @@ from numpy.typing import NDArray
 
 from src.config import REPO_ROOT, load_settings
 from src.trading.attribution import Windows, attribute_days
-from src.trading.backtest import load_window, window_days
+from src.trading.backtest import block_bootstrap_index, load_window, window_days
 from src.trading.strategies import MEDIAN_FORECAST, PERFECT_FORESIGHT
 
 __all__ = [
@@ -229,18 +229,6 @@ def judge(
     }
 
 
-def _draws(n: int, block_days: int, draws: int, seed: int) -> NDArray[np.int64]:
-    if n == 0:
-        raise ValueError("no days to resample")
-    block = min(block_days, n)
-    rng = np.random.default_rng(seed)
-    starts = rng.integers(0, n - block + 1, size=(draws, math.ceil(n / block)))
-    index: NDArray[np.int64] = (starts[:, :, None] + np.arange(block)).reshape(
-        draws, -1
-    )[:, :n]
-    return index
-
-
 def share_difference_interval(
     days: pd.DataFrame,
     *,
@@ -255,7 +243,9 @@ def share_difference_interval(
     resampled and both shares recomputed on every draw.
     """
     values = days[["gap", "sunset", "clock"]].to_numpy(dtype=float)
-    index = _draws(len(values), block_days, draws, seed)
+    index = block_bootstrap_index(
+        len(values), block_days=block_days, draws=draws, seed=seed
+    )
     gap = values[index, 0].sum(axis=1)
     drawn = 100 * (values[index, 1].sum(axis=1) - values[index, 2].sum(axis=1)) / gap
     point = 100 * (values[:, 1].sum() - values[:, 2].sum()) / values[:, 0].sum()
@@ -290,7 +280,9 @@ def season_difference_interval(
             where=gap != 0,
         )
 
-    index = _draws(len(values), block_days, draws, seed)
+    index = block_bootstrap_index(
+        len(values), block_days=block_days, draws=draws, seed=seed
+    )
     gap, cost, in_summer = values[index, 0], values[index, 1], summer[index]
     drawn = 100 * (
         season_share(gap, cost, in_summer) - season_share(gap, cost, ~in_summer)
