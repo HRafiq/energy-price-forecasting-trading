@@ -72,6 +72,7 @@ __all__ = [
     "SuiteResult",
     "attribution_summary",
     "backtest_strategies",
+    "block_bootstrap_index",
     "capture_in_months",
     "degradation_table",
     "longest_losing_streak",
@@ -180,6 +181,26 @@ def monthly_capture(pnl: pd.DataFrame) -> pd.DataFrame:
     return table.join(capture).reset_index()
 
 
+def block_bootstrap_index(
+    n: int, *, block_days: int = 7, draws: int = 5000, seed: int = 7
+) -> NDArray[np.int64]:
+    """Row positions for a moving-block bootstrap, one row of ``n`` per draw.
+
+    Each draw strings together blocks of ``block_days`` consecutive days starting at
+    random positions and cuts the result to ``n``, so a statistic recomputed on
+    ``values[index]`` keeps the dependence between neighbouring days.
+    """
+    if n == 0:
+        raise ValueError("no days to resample")
+    block = min(block_days, n)
+    rng = np.random.default_rng(seed)
+    starts = rng.integers(0, n - block + 1, size=(draws, math.ceil(n / block)))
+    index: NDArray[np.int64] = (starts[:, :, None] + np.arange(block)).reshape(
+        draws, -1
+    )[:, :n]
+    return index
+
+
 def paired_bootstrap_ci(
     differences: pd.Series,
     *,
@@ -195,14 +216,11 @@ def paired_bootstrap_ci(
     and 97.5% percentiles of the resampled means.
     """
     values = differences.to_numpy(dtype=float)
-    n = len(values)
-    if n == 0:
+    if len(values) == 0:
         raise ValueError("no differences to bootstrap")
-    block = min(block_days, n)
-    rng = np.random.default_rng(seed)
-    blocks = math.ceil(n / block)
-    starts = rng.integers(0, n - block + 1, size=(draws, blocks))
-    index = (starts[:, :, None] + np.arange(block)).reshape(draws, -1)[:, :n]
+    index = block_bootstrap_index(
+        len(values), block_days=block_days, draws=draws, seed=seed
+    )
     means = values[index].mean(axis=1)
     low, high = np.percentile(means, [2.5, 97.5])
     return float(values.mean()), float(low), float(high)

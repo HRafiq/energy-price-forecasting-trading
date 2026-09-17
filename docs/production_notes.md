@@ -330,6 +330,69 @@ block that carries 16% of the winter gap. The window to target is 15:00 to 21:00
 
 ---
 
+## T1 · How 15:00 to 21:00 loses money (validation: measured)
+
+**Question:** the Shapley split puts €6,530 of the €16,424 validation gap on forecast
+errors between 15:00 and 21:00, 39.8% (95% interval 32.0 to 47.2). Before choosing a
+fix, what do the two schedules actually do differently there: sell at the wrong
+quarter-hours, arrive with too little stored, keep too much back, or skip cycles?
+
+**Measured:** the saved validation schedules of median dispatch and perfect
+foresight, which reproduce the saved daily profit and the attribution's gaps to
+within €0.01, read three ways. The window's cash is split exactly into discharge
+volume, discharge price, charge volume, charge price and wear, and the cash gap is
+also given for every clock block of the day. Each day's window cost is attached to
+four flags whose thresholds were fixed before the data was read. And the forecast's
+peak hour in the window is compared with the realised one. Moving-block bootstrap
+intervals over weeks throughout. A read-only first pass of the flags came before the
+module, so the reading below is of the evidence, not a test fixed in advance.
+(docs/results/t1_mechanism.md)
+
+**What is clear:**
+
+- **The window's cost sits where the forecast came in below the outcome.**
+  Forecasts below the realised price carry 89.4% of it (79.4 to 101.0). Across the
+  day the pattern turns: on point estimates, forecasts below the outcome carry more
+  of the cost from 06:00 to 10:59 and 15:00 to 20:59, and forecasts above it at night,
+  from 11:00 to 14:59 and from 21:00. That is consistent with a forecast whose daily
+  shape is too flat, missing peaks from below and troughs from above, as the T1 note
+  already found at midday.
+- **The cash traded in the window cannot be told apart.** Perfect foresight's window
+  cash is -€3.55 a day against the median schedule's (-10.02 to +2.87), and even the
+  upper bound is below the €8.94 a day the Shapley split puts on the window. Inside
+  it, perfect foresight sells at better prices, +€4.08 a day (+2.59 to +6.09), and
+  buys more energy, -€5.01 a day (-7.01 to -3.00), mostly October to May. Over the
+  whole day its cash comes out ahead from 11:00 to 14:59, from 21:00 and at night.
+  Block cash and Shapley cost are two accountings of the same gap, so that does not
+  say where the window's forecast errors cost.
+- **The battery is not short of energy going in.** The median schedule reaches 15:00
+  with 0.08 MWh more stored than perfect foresight (0.04 to 0.12) and leaves at 21:00
+  with 0.07 MWh less (0.03 to 0.11), about a third of a quarter-hour at full power.
+- **No single mechanism.** Days where both schedules sell similar energy but perfect
+  foresight gets the better price carry the largest share of the window cost, 44.9%
+  (31.0 to 58.9), but the interval overlaps skipped cycles, 20.4% (6.7 to 35.5), and
+  arriving emptier, 16.4% (4.3 to 34.0).
+- **The peak hour is right more often than not, but not by much.** The forecast put
+  the window's highest-priced hour in the right place on 510 of 730 days, against 478
+  of 729 for simply taking the day before's realised peak hour. Days with the peak an
+  hour or more out carry 41.5% of the window cost (29.2 to 55.1). The comparison is by
+  whole hour, so it says nothing about timing within the hour.
+
+**What it changes:** the first pass read the flags alone and pointed at timing inside
+the window. That stays open: the one clearly non-zero part of window cash is a price
+effect, and the peak-hour measure cannot see timing below the hour. What the evidence
+does count against, on average, is a charge reserve before 15:00. The cost sits in
+forecasts below the outcome, so the cheapest test of whether correcting that pays is
+on the dispatch side: value selling in the window at the forecast's q75 instead of the
+median, keep buying at the median, and judge it on validation profit against a bar
+fixed before the run. Two risks are named in advance: the median schedule already
+sells slightly more in the window than perfect foresight, and a change in the window
+alone leaves the midday over-forecast cost untouched.
+
+**In my words:** _to write_
+
+---
+
 ## T2 · Error cost is not error size (Phase 4: measured)
 
 **What breaks:** judging a forecaster by its average error. A battery's profit
