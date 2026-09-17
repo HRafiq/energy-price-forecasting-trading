@@ -372,6 +372,49 @@ alone leaves the midday over-forecast cost untouched.
 
 ---
 
+## T1 · Selling the window at q75 (validation: tested, rejected)
+
+**Question:** the mechanism note above proposed the cheapest correction for forecasts
+that come in below the outcome from 15:00 to 21:00: value selling in that window at
+the forecast's q75 instead of the median, keep buying at the median everywhere, and
+change nothing else. Does it earn more?
+
+**Criterion, fixed before the run:** adopt it only if the mean daily profit difference
+against median dispatch over the 730 validation days has a 95% moving-block bootstrap
+interval (7-day blocks, 5,000 draws) entirely above zero.
+
+**Measured:** both arms dispatched on the production model's saved validation
+forecasts for the same 1 MW / 2 MWh battery with €8 wear, settled at the realised
+prices; the median arm reproduces the saved validation profit to within €0.01. Median
+dispatch made €149,498, 90.10% of perfect foresight; selling the window at q75 made
+€147,605, 88.96%. The difference is -€2.59 a day (-3.95 to -0.89), €1,893 less over
+the two years, so the criterion fails and the interval lies below zero. It loses in
+June to September, -€3.46 a day (-5.46 to -1.38), and October to May cannot be told
+from zero, -€2.16 (-4.00 to +0.05). (docs/results/t1_window_q75.md)
+
+**Why it loses:** the schedule sold 1.83 MWh a day in the window against 1.56, but
+only 3.41 MWh over the whole day against 3.28, so about half the extra window sales
+came out of other hours and the rest from cycling more, 1.80 times a day against 1.73.
+Cash from 18:00 to 20:59 rose by €20.24 a day (+14.87 to +24.83), while cash after
+21:00 fell by most of that, -€17.11 a day (-21.13 to -12.15), and cash in the morning
+and at midday fell too, -€2.37 (-3.60 to -1.36) and -€3.01 (-5.29 to -1.23); those
+last two turn a small gain into the loss. The two arms differ only in the window's sell
+valuation, so these shifts are the change's doing. That is the first of the two risks
+named before the run: the median schedule already sold slightly more in the window than
+perfect foresight, and a higher sell valuation there pushed it further the same way.
+The plan also turned optimistic: planned value ran €18.56 a day above what the schedule
+settled at, against €13.25 below for median dispatch.
+
+**What it changes:** the dispatch rule stays as it is. A higher valuation in one window
+shifted sales and cycling across the day and cost profit, which is consistent with the
+mechanism note's reading that the forecast's daily shape is too flat rather than too
+low in one block, though the shifts themselves follow from the battery's limits and do
+not single out one reading. This one test does not rule out a correction over the whole
+day's shape, in the forecast or in dispatch, but a window-only valuation is not one to
+use.
+
+---
+
 ## T2 · Error cost is not error size (Phase 4: measured)
 
 **What breaks:** judging a forecaster by its average error. A battery's profit
