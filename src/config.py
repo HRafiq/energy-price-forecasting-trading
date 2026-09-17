@@ -285,6 +285,17 @@ class TradingConfig(_Frozen):
         return value
 
 
+class PipelineConfig(_Frozen):
+    """How the live pipeline keeps its model fresh and its steps bounded."""
+
+    #: Days between refits of the served model, counted as the walk-forward counts
+    #: them: from the first delivery day a version forecast.
+    refit_every_days: int = Field(ge=1)
+    #: Longest a model fit, or one rung of the fallback chain, may take before the
+    #: pipeline gives up on it and moves on.
+    step_time_limit_s: float = Field(gt=0)
+
+
 class Settings(_Frozen):
     """Whole-file model for ``config/settings.yaml``."""
 
@@ -299,6 +310,7 @@ class Settings(_Frozen):
     baselines: BaselinesConfig
     battery: Battery
     trading: TradingConfig
+    pipeline: PipelineConfig
 
     @model_validator(mode="after")
     def _consistent(self) -> Settings:

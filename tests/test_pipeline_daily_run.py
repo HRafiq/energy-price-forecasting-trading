@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -16,6 +17,7 @@ from src.forecasting.base import QuantileForecast, make_forecast
 from src.forecasting.information import InformationSet
 from src.health.incidents import default_path, load_incidents
 from src.pipeline import daily_run as dr
+from src.pipeline.model_source import RefitOutcome
 from src.pipeline.plan import load_plan, plan_path
 from tests.fakes import synthetic_market
 
@@ -55,6 +57,18 @@ class FakeModel:
             index=info.target_index,
         )
         return make_forecast(self.name, info, values, quantiles)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test here refits into, or reads, the repository's MLflow store."""
+    monkeypatch.setattr(
+        dr,
+        "refresh_production_model",
+        lambda settings, day, frame, **kwargs: RefitOutcome(
+            "not_due", "fake registry", "3", "3"
+        ),
+    )
 
 
 @pytest.fixture
@@ -358,3 +372,157 @@ def test_a_plan_without_its_run_record_is_left_for_a_person(
 
     assert plan_file.read_bytes() == plan_bytes
     assert not dr.record_path(local, LIVE_DAY).exists()
+
+
+@pytest.mark.parametrize(
+    ("status", "incident_status"),
+    [
+        ("failed", "review"),
+        ("postponed", "resolved"),
+        ("not_due", None),
+        ("refitted", None),
+    ],
+)
+def test_a_refit_that_did_not_happen_is_recorded_and_the_day_still_trades(
+    settings: Settings,
+    tmp_path: Path,
+    market: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+    status: Literal["failed", "postponed", "not_due", "refitted"],
+    incident_status: str | None,
+) -> None:
+    local = _local(settings, tmp_path)
+    monkeypatch.setattr(
+        dr,
+        "refresh_production_model",
+        lambda settings, day, frame, **kwargs: RefitOutcome(
+            status,
+            f"{status} for the test",
+            "3",
+            "3",
+        ),
+    )
+
+    record = _run(local, market, model=FakeModel(local), monkeypatch=monkeypatch)
+
+    saved = json.loads(dr.record_path(local, LIVE_DAY).read_text(encoding="utf-8"))
+    assert saved["refit"]["status"] == status
+    assert record.step == "production" and load_plan(local, LIVE_DAY) is not None
+    refits = [
+        incident
+        for incident in load_incidents(default_path(local))
+        if "Scheduled refit" in incident.detail
+    ]
+    if incident_status is None:
+        assert refits == [] and not record.incidents
+    else:
+        assert [incident.status for incident in refits] == [incident_status]
+        assert refits[0].incident_id in record.incidents
+
+
+def test_a_refit_that_raises_does_not_stop_the_day(
+    settings: Settings,
+    tmp_path: Path,
+    market: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local = _local(settings, tmp_path)
+
+    def explode(*args: object, **kwargs: object) -> RefitOutcome:
+        raise RuntimeError("store locked")
+
+    monkeypatch.setattr(dr, "refresh_production_model", explode)
+
+    record = _run(local, market, model=FakeModel(local), monkeypatch=monkeypatch)
+
+    saved = json.loads(dr.record_path(local, LIVE_DAY).read_text(encoding="utf-8"))
+    assert saved["refit"]["status"] == "failed"
+    assert "RuntimeError: store locked" in saved["refit"]["detail"]
+    assert record.step == "production"
+
+
+def test_no_refit_is_attempted_without_the_registry(
+    settings: Settings,
+    tmp_path: Path,
+    market: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local = _local(settings, tmp_path)
+
+    def refuse(*args: object, **kwargs: object) -> RefitOutcome:
+        raise AssertionError("refit attempted without the registry")
+
+    monkeypatch.setattr(dr, "refresh_production_model", refuse)
+
+    _run(local, market)
+
+    saved = json.loads(dr.record_path(local, LIVE_DAY).read_text(encoding="utf-8"))
+    assert saved["refit"] is None
+
+
+def test_the_refit_sees_the_missing_feeds_and_runs_before_the_model_is_loaded(
+    settings: Settings,
+    tmp_path: Path,
+    market: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local = _local(settings, tmp_path)
+    calls: list[tuple[str, object]] = []
+
+    def refit(
+        settings: Settings, day: date, frame: pd.DataFrame, **kwargs: object
+    ) -> RefitOutcome:
+        calls.append(("refit", kwargs.get("missing_feeds")))
+        return RefitOutcome("postponed", "waiting", "3", "3")
+
+    model = FakeModel(local)
+
+    def load(settings: Settings, **kwargs: object) -> tuple[FakeModel, str]:
+        calls.append(("load", None))
+        return model, "3"
+
+    monkeypatch.setattr(dr, "refresh_production_model", refit)
+    monkeypatch.setattr(dr, "load_model", load)
+    late_weather = market.copy()
+    weather = [column for column in late_weather.columns if column.startswith("wx_")]
+    start = pd.Timestamp(LIVE_DAY, tz=local.market.timezone).tz_convert("UTC")
+    late_weather.loc[late_weather.index >= start, weather] = np.nan
+    assert weather
+
+    dr.run_day(
+        local,
+        LIVE_DAY,
+        frame=late_weather,
+        now_utc=datetime(2026, 9, 16, 9, 40, tzinfo=UTC),
+    )
+
+    assert [name for name, _ in calls] == ["refit", "load"]
+    assert calls[0][1] == ("weather",)
+
+
+def test_the_issue_time_is_taken_after_the_refit(
+    settings: Settings,
+    tmp_path: Path,
+    market: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local = _local(settings, tmp_path)
+    clock = {"now": datetime(2026, 9, 16, 9, 50, tzinfo=UTC)}
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:  # type: ignore[override]
+            return clock["now"]
+
+    def slow_refit(*args: object, **kwargs: object) -> RefitOutcome:
+        clock["now"] = datetime(2026, 9, 16, 10, 5, tzinfo=UTC)  # 12:05 Berlin
+        return RefitOutcome("refitted", "took a while", "3", "4")
+
+    monkeypatch.setattr(dr, "datetime", Clock)
+    monkeypatch.setattr(dr, "refresh_production_model", slow_refit)
+    monkeypatch.setattr(dr, "load_model", lambda s, **k: (FakeModel(local), "4"))
+
+    record = dr.run_day(local, LIVE_DAY, frame=market)
+
+    assert record.issued_utc == datetime(2026, 9, 16, 10, 5, tzinfo=UTC)
+    assert record.on_time is False

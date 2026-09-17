@@ -574,8 +574,10 @@ coverage in 2022Q3, and monthly to 44.4% over 28 days in autumn 2021.
 
 **Mitigation:** refit at least every 28 days, as the backtests do, and alert on rolling
 coverage and the pinball ratio (M2) so a jump in price level triggers an early refit.
-The live pipeline does not do either yet: it serves a model version registered by hand,
-and no drift alert triggers a refit. Keep the previous-day baseline running as a
+The live pipeline refits on that schedule: before a day is forecast, a served version
+that first forecast 28 or more days earlier is refit for that day, checked for finite
+quantiles and registered, and a refit is postponed while any feed is missing. No drift
+alert triggers an early refit yet. Keep the previous-day baseline running as a
 fallback: it re-anchors on yesterday's prices every day and covered 86.2% over the three
 years, though its rolling 28-day coverage fell to 58.8% in autumn 2021 and it captured
 only 69.8%.
@@ -635,9 +637,12 @@ model on empty weather inputs would have earned €11,253 against €11,311 for 
 without weather, €59 less. Each fallback day writes an incident marked as simulated: 76
 late data, 19 pipeline.
 
-**Mitigation:** the chain itself. Phase 7 builds it as the Airflow sensor and branch,
-but a hard stop on each step is not built yet: the sensor gives up on late feeds, while
-a model step that hangs has no time limit. One change was decided on validation profit:
+**Mitigation:** the chain itself. Phase 7 builds it as the Airflow sensor and branch.
+Every model fit and every rung of the chain now runs under a time limit,
+`pipeline.step_time_limit_s`, 120 s against the 8 s a production fit takes: a step
+still running is abandoned and the chain moves on. The registry calls and file reads
+around those steps have no limit of their own; only the forecast task's 15-minute
+Airflow timeout covers them, and a kill late in the morning could still miss the gate. One change was decided on validation profit:
 the live chain puts seasonal naive ahead of naive previous day, because it earned
 €132,292 against €128,836 on the same 730 days, 79.7% of perfect foresight against
 77.6%, although its pinball loss is worse, 11.49 against 9.61. The experiment above
@@ -872,9 +877,9 @@ anywhere, did not earn measurably more. That is the decision-value finding again
 battery profit turns on the timing and shape of the price curve, which pinball averages
 over, and a difference this small cannot be told apart from noise in two years. Compute
 is not the obstacle, since the weekly arm's 793 days ran in 16 minutes on this machine.
-The cost would be operational: in the live pipeline, where a model version is
-registered by hand today, weekly refits would mean training, checking and registering
-a version every week instead of every four.
+The cost would be operational: the live pipeline refits every 28 days, and weekly
+refits would mean training, checking and registering a version every week instead of
+every four, for a live record that would no longer match the backtested cadence.
 
 **Not tested:** a regime shift. Faster refits should matter most when prices move
 quickly, as in 2021 to 2023, and this run covers only the calmer validation window. The

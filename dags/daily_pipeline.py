@@ -14,9 +14,12 @@ Timing, for delivery day D+1 forecast on day D:
   published after the 10:30 ingest is still seen. It exits non-zero while anything
   is missing;
 * if the feeds arrive, ``forecast`` runs; if the sensor times out, ``forecast_late``
-  runs instead. Both call the same command, which walks the fallback chain and
-  writes an incident when it has to step down, so a late feed still produces a
-  committed schedule before the gate;
+  runs instead. Both call the same command, which refits the served model when it
+  is due, walks the fallback chain and writes an incident when it has to step down,
+  so a late feed still produces a committed schedule before the gate. Inside the
+  command every fit and every rung has ``pipeline.step_time_limit_s``; the task's
+  own ``execution_timeout`` is only the backstop for a command that hangs outside
+  them;
 * ``export_dashboard`` refreshes the dashboard, and ``check_deadline`` compares
   the time the forecast went out with the 12:00 gate. Airflow 3 dropped
   task-level SLAs, and its DAG-level deadline alerts are not usable from a test
@@ -50,6 +53,10 @@ RUN = f"cd {REPO} && uv run python -m"
 #: in seconds instead of waiting out the real deadline.
 SENSOR_TIMEOUT_S = int(os.environ.get("PIPELINE_SENSOR_TIMEOUT_S", 60 * 60))
 SENSOR_POKE_S = int(os.environ.get("PIPELINE_SENSOR_POKE_S", 300))
+#: A day's run takes seconds; with a refit and two rungs at their full 120 s time
+#: limit it takes about six minutes. Past this the task is killed; ``forecast`` is
+#: retried, ``forecast_late`` is not.
+FORECAST_TIMEOUT = timedelta(minutes=15)
 
 with DAG(
     dag_id="daily_pipeline",
@@ -102,12 +109,14 @@ with DAG(
     forecast = BashOperator(
         task_id="forecast",
         bash_command=f"{RUN} src.pipeline.daily_run --day {DAY}",
+        execution_timeout=FORECAST_TIMEOUT,
     )
     # The gate closes whether or not the feeds arrived: the same command runs, and
     # the fallback chain inside it degrades to whatever it can still forecast.
     forecast_late = BashOperator(
         task_id="forecast_late",
         bash_command=f"{RUN} src.pipeline.daily_run --day {DAY}",
+        execution_timeout=FORECAST_TIMEOUT,
         trigger_rule=TriggerRule.ONE_FAILED,
         retries=0,
     )

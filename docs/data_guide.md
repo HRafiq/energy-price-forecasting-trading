@@ -793,13 +793,25 @@ day because it earned more on validation; see the D5 section of the production n
 
 **The model the pipeline serves.** `src.pipeline.model_source` registers a fitted
 production model in the local MLflow registry as `price-quantile-gbm` and moves the
-`production` alias to it. The daily run loads that alias and never refits it; a new
-training day means a new registered version. With nothing registered, the run says so
-and the chain fits a model on the spot instead.
+`production` alias to it. The daily run loads that alias and never refits the version it
+loaded; a new training day means a new registered version. Before loading, the daily run
+refits on a schedule, `pipeline.refit_every_days` (28): when the served version first
+forecast that many or more days before the day at hand, a new production model is fit
+for that day, must forecast it with finite quantiles, and is registered as the new
+`production` version. A refit waits while any feed is missing, and one that fails or
+runs past `pipeline.step_time_limit_s` leaves the served version in place; the run
+record's `refit` entry says which happened, and a failed or postponed refit writes a
+pipeline incident. With nothing registered, the run registers version 1 on the first day
+with every feed, and until then the chain fits a model on the spot.
 
 **Airflow.** The DAG runs in its own environment, `.venv-airflow`, with its database
 and logs under `airflow_home/`. Neither is committed. The DAG file lives in `dags/`
-and every task shells into `src/`, so the pipeline can be run without Airflow. The deadline is a task of its own, `check_deadline`: Airflow 3 removed task-level
+and every task shells into `src/`, so the pipeline can be run without Airflow. Every
+fit and every rung of the fallback chain runs under `pipeline.step_time_limit_s`, 120 s,
+and a rung past it is abandoned so the chain moves on. The registry calls and file reads
+around them have no limit of their own; both forecast tasks carry a 15-minute
+`execution_timeout` as the backstop for those. The deadline is a task of its own,
+`check_deadline`: Airflow 3 removed task-level
 SLAs and its DAG-level deadline alerts could not run in a test, so the check reads
 the run record after the export and writes a critical pipeline incident when the
 schedule was committed after the 12:00 gate.

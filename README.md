@@ -17,7 +17,7 @@ A probabilistic price forecaster feeding a battery dispatch optimiser, backteste
 | Battery optimiser | Charge and discharge schedule for one delivery day | MILP in PuLP with CBC, wear cost, two-cycle cap |
 | Backtester | Walk-forward over two years, profit against perfect foresight, one frozen hold-out | Daily re-solve, Shapley attribution, block bootstrap |
 | Model health | Failure experiments measured in euros: a price regime shift, drift, a missing weather feed and the 12:00 deadline; an incident log | Walk-forward reruns, rolling alerts with thresholds fixed on validation, a fallback chain |
-| Live pipeline | A daily run that forecasts tomorrow, commits a schedule before the 12:00 gate and settles it the next day | Airflow DAG, readiness sensor with a deadline, fallback chain, MLflow model registry |
+| Live pipeline | A daily run that forecasts tomorrow, commits a schedule before the 12:00 gate and settles it the next day | Airflow DAG, readiness sensor with a deadline, fallback chain with a time limit on every step, MLflow model registry refit every 28 days |
 | Dashboard | Forecast fan, calibration, error by hour, the day's schedule, cumulative profit for any battery from 0.5 to 5 MW and 1 to 4 hours, and a Model health tab | React and FastAPI over exported backtest results; one day's schedule solved on request |
 | Desk briefing | Three to five sentences about the tab you are on, and three follow-up questions | A deterministic writer over that page's own numbers; a language model can be switched on, with every figure it writes checked against them before it is shown |
 
@@ -84,7 +84,7 @@ I broke the pipeline on purpose and measured what it cost.
 *The Model health tab: rolling 90% coverage through the 2021 to 2023 gas crisis for a model frozen on 2019 to 2020 prices against quarterly and monthly refits, and the drift monitor at the end of the hold-out, 67.5% coverage against its 74.0% alert line.*
 
 - Fitted on 2019 to 2020 and never refitted, the model's 90% range covered 25.7% of prices through the 2021 to 2023 gas crisis and captured 28.9% of perfect foresight. Refitted every 28 days, as in production, it held 80.6% coverage and 80.7% capture.
-- Refitting weekly instead of every 28 days cut mean pinball loss by 2.1%, in the evening peak as much as elsewhere, but brought no measurable gain in profit over two years of validation: €327 more, well inside the noise.
+- Refitting weekly instead of every 28 days cut mean pinball loss by 2.1%, in the evening peak as much as elsewhere, but brought no measurable gain in profit over two years of validation: €327 more, well inside the noise. The live pipeline keeps the 28-day cadence the backtests used.
 - My drift monitor, with thresholds fixed on validation, first alerted 31 days into the hold-out on its pinball-loss signal; the coverage signal took 102 days.
 - A missing weather feed at 11:40 cost 2.3 capture points, €3,742 over two years; falling back to a model trained without weather cut that to €1,973.
 - With pipeline failures injected on 13% of days, my fallback chain still submitted a forecast before the 12:00 gate every day in my simulation, and kept €15,898 that a pipeline without fallbacks, and so without a position on those days, would have lost.
@@ -102,7 +102,7 @@ flowchart LR
   B[ingest weather] --> D
   C[ingest fuels] --> D
   D --> E{wait for inputs<br/>deadline 11:30}
-  E -->|feeds arrived| F[forecast]
+  E -->|feeds arrived| F[refit if due,<br/>forecast]
   E -->|timed out| G[forecast, degraded]
   F --> H[export dashboard]
   G --> H
@@ -114,6 +114,16 @@ flowchart LR
   writes an incident saying which step ran and when the forecast went out.
 - **The model comes from the MLflow registry,** so the pipeline serves a version that
   was trained and logged deliberately, not one fitted on the spot.
+- **The model is refit every 28 days, as in the backtests.** Before a day is forecast,
+  if the served version first forecast 28 or more days earlier, a new model is fit for
+  that day, must forecast it with finite quantiles, and is registered as the new
+  production version.
+  A refit waits for a day with every feed, and one that fails leaves the served
+  version in place and writes an incident, so it never blocks the bid.
+- **A hung model cannot hold the gate.** Every fit and every rung of the chain has a
+  120-second limit against the 8 seconds a fit takes; a step still running is
+  abandoned and the chain moves on. The registry calls and file reads around them have
+  no limit of their own, and only the forecast task's 15-minute timeout covers them.
 - **A live day cannot be settled when it is traded,** so the run commits a plan and a
   separate step values it once prices publish.
 - **The hold-out stays frozen:** the pipeline refuses any delivery day before
@@ -148,6 +158,7 @@ with `make airflow`.
 - **Wear is a flat €8 per MWh discharged** with a two-cycle cap, not a cell-ageing model, and each day starts and ends half full.
 - **Outages sit outside the headline numbers (T4).** Settled at the German imbalance price, a random two-hour outage costs €44 on average, the worst window of a day €277.
 - **The hold-out is 105 summer days (T6)** and public data has gaps. Failure rates in the deadline simulation are assumptions, not measured outages.
+- **The live model refits on a fixed schedule only.** The drift monitor is measured on validation and the hold-out but does not run daily yet, so a sudden jump in price level waits for the next 28-day refit.
 - **The desk briefing is written by a template, not a model, by default (M5).** With a model switched on, every figure it writes must appear in the payload the page was built from, and prose that fails gets one rewrite before the template answers. What the check cannot tell is whether a figure is used in the right role: of 20 gpt-4o-mini briefings shown after it, 7 still misstated what a figure meant. A reflection layer with evals could close that gap; I left it out on purpose, because the template says less but everything it says is right.
 - Not a trading recommendation.
 
@@ -171,13 +182,13 @@ flowchart LR
 ```
 
 ```
-config/settings.yaml     market, data sources, hold-out, battery, strategies
+config/settings.yaml     market, data sources, hold-out, battery, strategies, live refits
 src/ingest/              SMARD, Open-Meteo, fuel and ENTSO-E clients, data-quality checks
 src/features/            features built only from what is known at 11:40
 src/forecasting/         information set, walk-forward harness, eight models, hold-out runner
 src/trading/             battery, MILP optimiser, settlement, strategies, backtest, attribution
-src/health/              drift monitor, incident log and failure experiments (M1, M2, M3, T4, D1, D5)
-src/pipeline/            the daily live run: readiness, fallback chain, plan, model registry
+src/health/              drift monitor, incident log, failure experiments (M1, M2, M3, T4, D1, D5), T1 follow-ups
+src/pipeline/            the daily live run: readiness, fallback chain, plan, model registry and refits
 dags/                    the Airflow DAG, thin: every task shells into src/
 src/export/              dashboard artifacts: forecasts, P&L grid, attribution
 api/                     read-only FastAPI service behind the dashboard
