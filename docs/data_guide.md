@@ -121,9 +121,11 @@ Details: `docs/results/entsoe_price_check.md`.
   quarter-hourly throughout.
 - **Volumes are average MW.** SMARD publishes MWh per quarter-hour; the builder
   multiplies by four. Tables in this guide show GW for readability.
-- **The dataset ends at the last published price.** Other columns can end
-  earlier. In the build of 13 Sep 2026, prices for 14 September were already
-  published but the wind and solar forecasts for that day were not, consistent
+- **A backtest build ends at the last published price; a live build does not.**
+  A live run asks for the delivery day (`build_dataset --through`), which keeps that
+  day's rows with the price left blank. Other columns can end earlier. In the
+  build of 13 Sep 2026, prices for 14 September were already published but the
+  wind and solar forecasts for that day were not, consistent
   with their 18:00 submission time, and measured values ended 34 hours before
   the last price. The quality report lists these trailing gaps.
 

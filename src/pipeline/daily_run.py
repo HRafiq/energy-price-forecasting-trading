@@ -53,11 +53,20 @@ from src.health.incidents import (
 )
 from src.pipeline.chain import STEPS, ChainResult, run_chain
 from src.pipeline.model_source import ModelSourceError, load_model
-from src.pipeline.plan import Plan, load_plan, plan_day, save_plan, settle_plan
+from src.pipeline.plan import (
+    Plan,
+    load_plan,
+    plan_day,
+    plan_path,
+    save_plan,
+    settle_plan,
+)
 from src.pipeline.readiness import Readiness, check_readiness
 
 __all__ = [
     "SOURCE",
+    "IncompleteRunError",
+    "PlanExistsError",
     "RunRecord",
     "check_deadline",
     "deadline_missed",
@@ -200,6 +209,14 @@ def _chain_incident(
     )
 
 
+class PlanExistsError(FileExistsError):
+    """A schedule is already committed for the day, and a rerun must not replace it."""
+
+
+class IncompleteRunError(RuntimeError):
+    """A plan was saved but the run that saved it never wrote its run record."""
+
+
 def run_day(
     settings: Settings,
     target_day: date,
@@ -207,12 +224,34 @@ def run_day(
     frame: pd.DataFrame | None = None,
     use_registry: bool = True,
     now_utc: datetime | None = None,
+    replace: bool = False,
 ) -> RunRecord:
-    """Forecast and commit one delivery day, and record what happened."""
+    """Forecast and commit one delivery day, and record what happened.
+
+    A day that already has a committed schedule is refused unless ``replace`` is set.
+    """
     if target_day < settings.evaluation.live_from:
         raise ValueError(
             f"{target_day} is before live_from {settings.evaluation.live_from}; "
             "the live pipeline does not re-run evaluated days"
+        )
+    committed = plan_path(settings, target_day)
+    recorded = record_path(settings, target_day)
+    if not replace and recorded.exists():
+        # A bid submitted at the gate is final. Airflow starts a run for the latest
+        # slot it missed, and without this a rerun would commit a second, later
+        # schedule over the one on record and rewrite its run record as late. The
+        # run record is written last, so its presence means that run finished.
+        raise PlanExistsError(
+            f"a schedule for {target_day} is already committed at {committed}"
+        )
+    if not replace and committed.exists():
+        # A plan without its run record: a run crashed after committing. Skipping
+        # would leave the deadline check without a record, and re-forecasting would
+        # replace the bid with a later one, so a person decides.
+        raise IncompleteRunError(
+            f"a schedule for {target_day} exists at {committed} but its run record "
+            f"{recorded} does not; inspect it, then rerun with --replace to redo it"
         )
     issued_utc = now_utc or datetime.now(UTC)
     issue_day = target_day - timedelta(days=1)
@@ -344,6 +383,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="fit the production model instead of loading a registered one",
     )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="replace a schedule already committed for that day; a real bid is "
+        "final at the gate, so use this only to repair a broken run",
+    )
     parser.add_argument("--config", type=Path, default=None)
     args = parser.parse_args(argv)
 
@@ -357,7 +402,15 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(settle_day(settings, args.day), indent=2))
         return 0
 
-    record = run_day(settings, args.day, use_registry=not args.no_registry)
+    try:
+        record = run_day(
+            settings, args.day, use_registry=not args.no_registry, replace=args.replace
+        )
+    except PlanExistsError as exc:
+        # Not a failure: the day is already traded, so the DAG carries on to the
+        # export, the deadline check and settlement with the schedule on record.
+        print(f"{args.day}: not replaced, {exc}; pass --replace to overwrite it")
+        return 0
     print(json.dumps(record.as_dict(), indent=2))
     # A committed schedule is a success even when it was late: lateness is carried
     # by the run record and its incident. Failing here would make the DAG run the

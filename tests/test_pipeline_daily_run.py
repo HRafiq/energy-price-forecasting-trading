@@ -16,7 +16,7 @@ from src.forecasting.base import QuantileForecast, make_forecast
 from src.forecasting.information import InformationSet
 from src.health.incidents import default_path, load_incidents
 from src.pipeline import daily_run as dr
-from src.pipeline.plan import load_plan
+from src.pipeline.plan import load_plan, plan_path
 from tests.fakes import synthetic_market
 
 LIVE_DAY = date(2026, 9, 17)
@@ -69,6 +69,7 @@ def _run(
     now: datetime | None = None,
     model: FakeModel | None = None,
     monkeypatch: pytest.MonkeyPatch | None = None,
+    replace: bool = False,
 ) -> dr.RunRecord:
     if monkeypatch is not None and model is not None:
         monkeypatch.setattr(dr, "load_model", lambda s, **k: (model, "3"))
@@ -78,6 +79,7 @@ def _run(
         frame=market,
         use_registry=model is not None,
         now_utc=now or datetime(2026, 9, 16, 9, 40, tzinfo=UTC),
+        replace=replace,
     )
 
 
@@ -252,12 +254,14 @@ def test_the_deadline_check_reports_only_a_late_run(
     assert dr.check_deadline(local, LIVE_DAY) is True
     assert not default_path(local).exists()
 
+    # The same day again, after the gate: replacing on purpose to make a late run.
     late = _run(
         local,
         market,
         model=model,
         monkeypatch=monkeypatch,
         now=datetime(2026, 9, 16, 10, 30, tzinfo=UTC),
+        replace=True,
     )
     assert not late.on_time
     assert dr.check_deadline(local, LIVE_DAY) is False
@@ -279,3 +283,78 @@ def test_nothing_is_defined_after_the_main_guard() -> None:
     after = source[guard:].splitlines()[1:]
     stray = [line for line in after if line and not line.startswith((" ", "\t"))]
     assert stray == [], f"defined after the main guard: {stray}"
+
+
+def test_a_rerun_never_replaces_a_committed_schedule(
+    settings: Settings,
+    tmp_path: Path,
+    market: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local = _local(settings, tmp_path)
+    model = FakeModel(local)
+    first = _run(local, market, model=model, monkeypatch=monkeypatch)
+    plan_file, record_file = plan_path(local, LIVE_DAY), dr.record_path(local, LIVE_DAY)
+    plan_bytes, record_bytes = plan_file.read_bytes(), record_file.read_bytes()
+    afternoon = datetime(2026, 9, 16, 14, 0, tzinfo=UTC)
+
+    # Airflow starting in the afternoon runs the slot it missed: same day, after the
+    # gate. The schedule on record was on time and must stay exactly as it was.
+    with pytest.raises(dr.PlanExistsError, match="already committed"):
+        _run(local, market, model=model, monkeypatch=monkeypatch, now=afternoon)
+
+    assert first.on_time
+    assert plan_file.read_bytes() == plan_bytes
+    assert record_file.read_bytes() == record_bytes
+    assert not default_path(local).exists(), "a refused rerun writes no incident"
+
+    replaced = _run(
+        local, market, model=model, monkeypatch=monkeypatch, now=afternoon, replace=True
+    )
+    assert not replaced.on_time
+    assert json.loads(record_file.read_text(encoding="utf-8"))["on_time"] is False
+
+
+def test_the_cli_leaves_a_committed_schedule_alone_and_exits_cleanly(
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    local = _local(settings, tmp_path)
+    monkeypatch.setattr(dr, "load_settings", lambda config=None: local)
+    asked_to_replace: list[bool] = []
+
+    def refuse(settings: Settings, day: date, **kwargs: object) -> dr.RunRecord:
+        asked_to_replace.append(bool(kwargs.get("replace")))
+        raise dr.PlanExistsError(f"a schedule for {day} is already committed")
+
+    monkeypatch.setattr(dr, "run_day", refuse)
+
+    # The DAG's forecast task must succeed, so the export, the deadline check and
+    # settlement still run against the schedule on record.
+    assert dr.main(["--day", str(LIVE_DAY)]) == 0
+    assert "not replaced" in capsys.readouterr().out
+    assert dr.main(["--day", str(LIVE_DAY), "--replace"]) == 0
+    assert asked_to_replace == [False, True]
+
+
+def test_a_plan_without_its_run_record_is_left_for_a_person(
+    settings: Settings,
+    tmp_path: Path,
+    market: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local = _local(settings, tmp_path)
+    model = FakeModel(local)
+    _run(local, market, model=model, monkeypatch=monkeypatch)
+    plan_file = plan_path(local, LIVE_DAY)
+    plan_bytes = plan_file.read_bytes()
+    # A run that crashed after committing its plan, before writing its record.
+    dr.record_path(local, LIVE_DAY).unlink()
+
+    with pytest.raises(dr.IncompleteRunError, match="run record"):
+        _run(local, market, model=model, monkeypatch=monkeypatch)
+
+    assert plan_file.read_bytes() == plan_bytes
+    assert not dr.record_path(local, LIVE_DAY).exists()

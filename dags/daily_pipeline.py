@@ -9,8 +9,10 @@ Timing, for delivery day D+1 forecast on day D:
 
 * the run starts at 10:30 local, an hour before the 11:40 issue time;
 * ingest refreshes prices, weather and fuels, retrying on a flaky download;
-* ``wait_for_inputs`` polls the readiness check until every feed has arrived, and
-  gives up at the deadline. Its command exits non-zero while anything is missing;
+* ``wait_for_inputs`` rebuilds the dataset and inputs and runs the readiness check
+  on every poke, until every feed has arrived or the deadline passes, so a feed
+  published after the 10:30 ingest is still seen. It exits non-zero while anything
+  is missing;
 * if the feeds arrive, ``forecast`` runs; if the sensor times out, ``forecast_late``
   runs instead. Both call the same command, which walks the fallback chain and
   writes an incident when it has to step down, so a late feed still produces a
@@ -65,7 +67,8 @@ with DAG(
 ) as dag:
     prices = BashOperator(
         task_id="ingest_prices",
-        bash_command=f"{RUN} src.ingest.build_dataset",
+        # The day being forecast has no prices yet; keep its rows anyway.
+        bash_command=f"{RUN} src.ingest.build_dataset --through {DAY}",
     )
     weather = BashOperator(
         task_id="ingest_weather",
@@ -82,7 +85,14 @@ with DAG(
 
     wait = BashSensor(
         task_id="wait_for_inputs",
-        bash_command=f"{RUN} src.pipeline.readiness --day {DAY}",
+        # Rebuild on every poke: checking the file built at 10:30 would never see a
+        # load forecast that SMARD publishes a few minutes later. A failed rebuild
+        # keeps the last good files, so readiness always runs after it.
+        bash_command=(
+            f"{RUN} src.ingest.build_dataset --through {DAY}; "
+            f"{RUN} src.ingest.build_inputs; "
+            f"{RUN} src.pipeline.readiness --day {DAY}"
+        ),
         poke_interval=SENSOR_POKE_S,
         timeout=SENSOR_TIMEOUT_S,
         mode="reschedule",
