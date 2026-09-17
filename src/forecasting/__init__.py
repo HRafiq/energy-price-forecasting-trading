@@ -1,1 +1,1 @@
-"""Baselines (Phase 1), quantile models (Phase 2), spike classifier (Phase 6)."""
+"""Baselines (Phase 1) and quantile models (Phase 2)."""

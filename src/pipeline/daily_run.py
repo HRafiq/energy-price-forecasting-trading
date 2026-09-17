@@ -438,9 +438,9 @@ def check_deadline(settings: Settings, day: date) -> bool:
 def deadline_missed(target_day: str | None = None) -> str:
     """Record that a run did not finish before its deadline.
 
-    Airflow calls this from the DAG's deadline alert. It writes a pipeline
-    incident so a missed deadline appears in the Model health log beside the
-    fallbacks, rather than only in the scheduler's own history.
+    The DAG's deadline task calls it through ``check_deadline`` when a run was not
+    on time. It writes a pipeline incident so a missed deadline appears in the Model
+    health log beside the fallbacks, rather than only in the scheduler's own history.
     """
     settings = load_settings()
     day = date.fromisoformat(target_day) if target_day else date.today()
