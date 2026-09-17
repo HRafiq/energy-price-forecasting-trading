@@ -665,9 +665,67 @@ Catching that would mean tying each sentence to the key it describes, which this
 does not attempt. What it does catch is the figure
 that exists nowhere in the data, which is the one that cannot be argued with.
 
-**Without a key:** `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are optional. With
-neither key the deterministic writer answers every request, which is what the test suite runs against, so the grounding
-path and the fallback are exercised on every run with no network and no spend.
+**Without a model:** the deterministic writer answers every request unless
+`NARRATION_PROVIDER` switches a model on, which is what the test suite runs against,
+so the grounding path and the fallback are exercised on every run with no network
+and no spend. Why the model is off by default is the next note.
+
+**In my words:** _to write_
+
+---
+
+## M5 · A grounded briefing that misreads the page (Phase 8: measured, left out by choice)
+
+**What breaks:** the grounding check proves that every figure in a briefing is on
+the page. It cannot prove that the sentence gives the figure its right meaning, and
+a briefing that states a true number in the wrong role reads exactly as confidently
+as one that does not.
+
+**Measured:** the third run in the note above, twenty gpt-4o-mini briefings, all
+shown, nineteen as first drafts and one after a rewrite, was then read sentence by
+sentence against its payload. Seven misstated what a figure means.
+
+- **Forecast, all five:** each read the tab's gap to perfect foresight over 29
+  traded days, split by hour block into over-forecast and under-forecast shares, as
+  the battery's own performance. The evening block's 1028.78 EUR under-forecast
+  share became "an underperformance of 1028.78 EUR" in three of them, and its -5.55
+  EUR over-forecast share an overperformance in three. One put the -5.55 EUR in "the
+  preceding block"; one called the 1028.78 EUR a value at stake, the name of a
+  different figure, and described the afternoon as underperforming, which the
+  afternoon blocks' negative under-forecast shares contradict.
+- **Trading, one of five:** the window's 8755.24 EUR over 29 traded days was given
+  as what the battery made on 2026-09-14.
+- **Overview, one of six:** the widest forecast band of the day, 101.07 EUR/MWh from
+  q05 to q95, was presented as the result of the day's highest and lowest prices,
+  which are 588.01 EUR/MWh apart.
+- **Model health, four:** none.
+
+Two of the forecast briefings also told the operator the dispatch strategy should
+be reviewed, against the rule to say what the numbers show and not what to do.
+
+**The decision:** the template writes the briefing by default, and a model writes
+it only when `NARRATION_PROVIDER` names one and its key is set; a key alone is not
+enough. The template says less: on the forecast tab it gives coverage and the
+worst hour but not the gap to perfect foresight by block, and it answers only one of
+the three follow-up questions. Everything it does say is grounded by construction
+and in its right role. What the model adds is breadth and fluency, and at a cost of
+7 briefings in 20 misstating a figure, every forecast briefing among them, that is
+not worth showing an operator unread.
+
+**Not added, on purpose: a reflection workflow.** The fix is known. A LangGraph
+workflow would have a generator write the briefing and a reflection step review
+each sentence against what each payload key means, its unit, its window and its
+direction, then send the generator specific feedback on what to change before the
+grounding check runs. It needs carefully engineered generator and reflection
+prompts, and it needs evals: a labelled set of briefings with known role errors, the
+reviewer's recall on that set, and a pass bar fixed before looking. The eval is most
+of the work, because the reviewer is a language model with the same blind spot as
+the writer, and without it there is no evidence the loop catches what it is for.
+Every briefing would also take two or three more calls. For a panel that restates
+numbers already on the screen, that effort is better spent on the forecast and the
+live record, so the workflow is intentionally not built. It becomes worth building
+when the briefing is expected to explain rather than restate: answering the
+follow-up questions properly, or a question the operator types.
 
 **In my words:** _to write_
 

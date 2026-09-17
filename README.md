@@ -19,7 +19,7 @@ A probabilistic price forecaster feeding a battery dispatch optimiser, backteste
 | Model health | Failure experiments measured in euros: a price regime shift, drift, a missing weather feed and the 12:00 deadline; an incident log | Walk-forward reruns, rolling alerts with thresholds fixed on validation, a fallback chain |
 | Live pipeline | A daily run that forecasts tomorrow, commits a schedule before the 12:00 gate and settles it the next day | Airflow DAG, readiness sensor with a deadline, fallback chain, MLflow model registry |
 | Dashboard | Forecast fan, calibration, error by hour, the day's schedule, cumulative profit for any battery from 0.5 to 5 MW and 1 to 4 hours, and a Model health tab | React and FastAPI over exported backtest results; one day's schedule solved on request |
-| Desk briefing | Three to five sentences about the tab you are on, and three follow-up questions | A language model given only that page's own numbers, with every figure it writes checked against them before it is shown |
+| Desk briefing | Three to five sentences about the tab you are on, and three follow-up questions | A deterministic writer over that page's own numbers; a language model can be switched on, with every figure it writes checked against them before it is shown |
 
 ## Results
 
@@ -148,7 +148,7 @@ with `make airflow`.
 - **Wear is a flat €8 per MWh discharged** with a two-cycle cap, not a cell-ageing model, and each day starts and ends half full.
 - **Outages sit outside the headline numbers (T4).** Settled at the German imbalance price, a random two-hour outage costs €44 on average, the worst window of a day €277.
 - **The hold-out is 105 summer days (T6)** and public data has gaps. Failure rates in the deadline simulation are assumptions, not measured outages.
-- **The desk briefing is checked, not understood.** Every figure it writes must appear in the payload the page was built from, and prose that fails is thrown away before it is shown. What the check cannot tell is whether a figure that is in the payload is being used in the right role.
+- **The desk briefing is written by a template, not a model, by default (M5).** With a model switched on, every figure it writes must appear in the payload the page was built from, and prose that fails gets one rewrite before the template answers. What the check cannot tell is whether a figure is used in the right role: of 20 gpt-4o-mini briefings shown after it, 7 still misstated what a figure meant. A reflection layer with evals could close that gap; I left it out on purpose, because the template says less but everything it says is right.
 - Not a trading recommendation.
 
 A production system would add intraday re-optimisation and bid curves on top of what
@@ -214,7 +214,7 @@ make test       # ruff, strict mypy, pytest
 
 SMARD and Open-Meteo need no key. For ENTSO-E, register on the [Transparency Platform](https://transparency.entsoe.eu), email transparency@entsoe.eu asking for Restful API access, generate a token in your account settings and set it as `ENTSOE_API_KEY` in `.env` at the repository root: copy `.env.example` to `.env` to start, which is gitignored. Downloads land in `data/raw/` and `data/processed/`, which are not committed.
 
-The desk briefing can call a model. Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in the same `.env`, or export it in your shell, which takes precedence over `.env`; with both set, `NARRATION_PROVIDER` chooses. With neither, the briefing is written from the same payload by a deterministic writer, so the dashboard and every test run without a key. Whichever writes it, every figure is checked against the page before it is shown.
+The desk briefing needs no key: a deterministic writer produces it from the page's own numbers, and every test runs that way. To have a model write it instead, set `NARRATION_PROVIDER` to `openai` or `anthropic` and that provider's key (`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`) in the same `.env`, or export them in your shell, which takes precedence over `.env`. A key alone does not switch the model on. Every figure the model writes is checked against the page before it is shown.
 
 On an Apple M2 Pro with 10 cores, the eight-model comparison takes 88 minutes, the five validation backtest suites 17, and the hold-out forecasts 5.
 

@@ -392,22 +392,6 @@ def test_the_key_is_read_from_the_environment_then_the_env_file(
     assert provider_mod.load_api_key(tmp_path / "absent.env") == "from-environment"
 
 
-def test_without_a_key_the_template_writes_and_with_one_the_model_would(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv(provider_mod.API_KEY_ENV, raising=False)
-    empty = tmp_path / "none.env"
-
-    chosen = provider_mod.build_provider(empty)
-    assert isinstance(chosen, provider_mod.TemplateProvider)
-
-    monkeypatch.setenv(provider_mod.API_KEY_ENV, "test-key")
-    with_key = provider_mod.build_provider(empty)
-    # The model is selected, but nothing calls it here.
-    assert isinstance(with_key, provider_mod.OpenAIProvider)
-    assert with_key.name == "openai" and with_key.model == provider_mod.DEFAULT_MODEL
-
-
 def _env(tmp_path: Path, **settings: str) -> Path:
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -417,69 +401,93 @@ def _env(tmp_path: Path, **settings: str) -> Path:
     return env_file
 
 
-def test_an_anthropic_key_alone_selects_anthropic(tmp_path: Path) -> None:
-    chosen = provider_mod.build_provider(_env(tmp_path, ANTHROPIC_API_KEY="a-key"))
-
-    assert isinstance(chosen, provider_mod.AnthropicProvider)
-    assert chosen.model == provider_mod.DEFAULT_ANTHROPIC_MODEL
+BOTH_KEYS = {"OPENAI_API_KEY": "o-key", "ANTHROPIC_API_KEY": "a-key"}
 
 
-def test_with_both_keys_the_setting_chooses_and_openai_is_the_default(
-    tmp_path: Path,
-) -> None:
-    both = {"OPENAI_API_KEY": "o-key", "ANTHROPIC_API_KEY": "a-key"}
+def test_a_key_alone_does_not_switch_a_model_on(tmp_path: Path) -> None:
+    for keys in (
+        {},
+        {"OPENAI_API_KEY": "o-key"},
+        {"ANTHROPIC_API_KEY": "a-key"},
+        BOTH_KEYS,
+    ):
+        chosen = provider_mod.build_provider(_env(tmp_path, **keys))
+        assert isinstance(chosen, provider_mod.TemplateProvider), keys
 
-    default = provider_mod.build_provider(_env(tmp_path, **both))
+
+def test_the_named_provider_writes_when_its_key_is_set(tmp_path: Path) -> None:
+    openai = provider_mod.build_provider(
+        _env(tmp_path, **BOTH_KEYS, NARRATION_PROVIDER="openai")
+    )
     anthropic = provider_mod.build_provider(
-        _env(tmp_path, **both, NARRATION_PROVIDER="anthropic")
-    )
-    unmet = provider_mod.build_provider(
-        _env(tmp_path, OPENAI_API_KEY="o-key", NARRATION_PROVIDER="anthropic")
+        _env(tmp_path, **BOTH_KEYS, NARRATION_PROVIDER=" Anthropic ")
     )
 
-    assert isinstance(default, provider_mod.OpenAIProvider)
+    # The model is selected, but nothing calls it here.
+    assert isinstance(openai, provider_mod.OpenAIProvider)
+    assert openai.api_key == "o-key" and openai.model == provider_mod.DEFAULT_MODEL
     assert isinstance(anthropic, provider_mod.AnthropicProvider)
-    # A choice without its key does not silently disable the key that is set.
-    assert isinstance(unmet, provider_mod.OpenAIProvider)
+    assert anthropic.api_key == "a-key"
+    assert anthropic.model == provider_mod.DEFAULT_ANTHROPIC_MODEL
+
+
+def test_a_named_provider_without_its_key_leaves_the_template(tmp_path: Path) -> None:
+    # The other provider's key does not stand in: that would be a model nobody chose.
+    for settings in (
+        {"ANTHROPIC_API_KEY": "a-key", "NARRATION_PROVIDER": "openai"},
+        {"OPENAI_API_KEY": "o-key", "NARRATION_PROVIDER": "anthropic"},
+        {**BOTH_KEYS, "NARRATION_PROVIDER": "claude"},
+        {**BOTH_KEYS, "NARRATION_PROVIDER": "template"},
+    ):
+        chosen = provider_mod.build_provider(_env(tmp_path, **settings))
+        assert isinstance(chosen, provider_mod.TemplateProvider), settings
+
+
+def test_a_setting_that_cannot_switch_a_model_on_says_so(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING", logger=provider_mod.__name__):
+        provider_mod.build_provider(_env(tmp_path, NARRATION_PROVIDER="open-ai"))
+        provider_mod.build_provider(_env(tmp_path, NARRATION_PROVIDER="openai"))
+        provider_mod.build_provider(_env(tmp_path, NARRATION_PROVIDER="template"))
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == [
+        "NARRATION_PROVIDER='open-ai' is not openai or anthropic; the template writes",
+        "NARRATION_PROVIDER=openai but its key is not set; the template writes",
+    ]
 
 
 def test_the_model_setting_is_read_from_the_env_file(tmp_path: Path) -> None:
     chosen = provider_mod.build_provider(
-        _env(tmp_path, ANTHROPIC_API_KEY="a-key", NARRATION_MODEL="claude-sonnet-5")
-    )
-
-    assert chosen.model == "claude-sonnet-5"  # type: ignore[attr-defined]
-
-
-def test_a_choice_whose_key_is_missing_falls_back_without_its_model(
-    tmp_path: Path,
-) -> None:
-    standing_in = provider_mod.build_provider(
         _env(
             tmp_path,
             ANTHROPIC_API_KEY="a-key",
-            NARRATION_PROVIDER="openai",
-            NARRATION_MODEL="gpt-4.1-mini",
+            NARRATION_PROVIDER="anthropic",
+            NARRATION_MODEL="claude-sonnet-5",
         )
     )
 
-    assert isinstance(standing_in, provider_mod.AnthropicProvider)
-    # The model named for OpenAI would be refused by Anthropic on every call.
-    assert standing_in.model == provider_mod.DEFAULT_ANTHROPIC_MODEL
+    assert chosen.model == "claude-sonnet-5"  # type: ignore[attr-defined]
 
 
 def test_a_setting_in_the_environment_wins_over_the_env_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     env_file = _env(tmp_path, OPENAI_API_KEY="o-key", NARRATION_MODEL="from-file")
-    monkeypatch.setenv("NARRATION_MODEL", "from-shell")
+    assert isinstance(
+        provider_mod.build_provider(env_file), provider_mod.TemplateProvider
+    )
 
+    monkeypatch.setenv("NARRATION_PROVIDER", "openai")
+    monkeypatch.setenv("NARRATION_MODEL", "from-shell")
     chosen = provider_mod.build_provider(env_file)
 
-    assert chosen.model == "from-shell"  # type: ignore[attr-defined]
+    assert isinstance(chosen, provider_mod.OpenAIProvider)
+    assert chosen.model == "from-shell"
 
 
-def test_empty_settings_in_the_env_file_mean_no_key(tmp_path: Path) -> None:
+def test_empty_settings_in_the_env_file_mean_the_template(tmp_path: Path) -> None:
     chosen = provider_mod.build_provider(
         _env(tmp_path, OPENAI_API_KEY="", ANTHROPIC_API_KEY="", NARRATION_PROVIDER="")
     )

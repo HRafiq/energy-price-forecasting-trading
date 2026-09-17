@@ -1,6 +1,6 @@
 """Check that a briefing only states numbers the payload already contains.
 
-The desk briefing is written by a language model, so the rule that makes it
+When a language model writes the desk briefing, the rule that makes it
 trustworthy has to be enforced outside the model: every figure in the prose must
 appear in the payload the model was given (:mod:`src.narration.payload`). This
 module reads the numbers back out of the prose and looks for each one.
