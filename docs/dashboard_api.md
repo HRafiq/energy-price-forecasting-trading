@@ -335,7 +335,8 @@ run's last day is used:
 {"tab": "overview", "day": "2026-09-14", "window": "last30",
  "text": "On 2026-09-14 the price ran from 152 EUR/MWh at 16:00 to 740.01 at 19:45. ...",
  "provider": "template", "model": null, "grounded": true,
- "unsupported": [], "fell_back": false, "rejected": [], "fallback_reason": null,
+ "unsupported": [], "fell_back": false, "attempts": 1, "rejected": [],
+ "fallback_reason": null,
  "follow_ups": {"why_this_dispatch": "Why this dispatch?",
                 "what_changed": "What changed vs yesterday?",
                 "explain_the_miss": "Explain the miss"}}
@@ -343,12 +344,16 @@ run's last day is used:
 
 The briefing may state only numbers the deterministic core already produced. The
 model is given a payload built from these same endpoints and nothing else, and every
-figure it writes is looked up in that payload afterwards. Prose carrying a figure
-that is not there is thrown away: `rejected` names the figures that failed,
-`fallback_reason` says why the draft was dropped, the deterministic writer answers
-instead, and `fell_back` is `true`. When the model cannot be reached, `rejected` is
-empty and `fallback_reason` carries the error, so the endpoint always returns a
-briefing.
+figure it writes is looked up in that payload afterwards. A draft carrying a figure
+that is not there is refused, and the model writes once more, shown its draft and
+told which figures failed. If the rewrite passes it is returned, with `attempts`
+at 2 and the first draft's figures still listed in `rejected`. If it fails too there
+is no third draft: the deterministic writer answers, `fell_back` is `true`,
+`rejected` names the figures from both drafts, and `fallback_reason` says the
+briefing stated figures the page does not show. When the model cannot be reached,
+nothing is retried, `fallback_reason` carries the error, and the endpoint still
+returns a briefing. `attempts` counts the drafts asked for, so it is 1 when the
+first one stood or no key is set.
 
 Rounding is the only latitude the check gives. A payload holding 0.8957 supports
 "89.57%", "89.6%" and "90%", but not "89%"; 964.46 supports "964" but not "965"; and

@@ -19,7 +19,7 @@ from src.config import Settings
 from src.export.artifacts import build_manifest
 from src.health.incidents import Incident, IncidentType, make_incident_id
 from src.narration import provider as narration_provider
-from src.narration.provider import Briefing, NarrationError
+from src.narration.provider import Briefing, NarrationError, Retry, TemplateProvider
 from src.trading.optimizer import DispatchError
 from tests.test_trading import day_frame
 
@@ -744,18 +744,71 @@ def test_a_bad_incident_query_is_refused_before_the_missing_export(
 
 
 class _Liar:
-    """A provider that writes a figure the payload does not contain."""
+    """A provider that writes a figure the payload does not contain, every time."""
 
     name = "openai"
 
+    def __init__(self) -> None:
+        self.retries: list[Retry | None] = []
+
     def write(
-        self, payload: dict[str, object], question: str | None = None
+        self,
+        payload: dict[str, object],
+        question: str | None = None,
+        retry: Retry | None = None,
     ) -> Briefing:
+        self.retries.append(retry)
         return Briefing(
             "The battery earned 4,242.42 EUR on the evening block.",
             "openai",
             "gpt-4o-mini",
         )
+
+
+class _CorrectedOnRetry(_Liar):
+    """Invents a figure, then writes a grounded draft once told which one failed."""
+
+    def write(
+        self,
+        payload: dict[str, object],
+        question: str | None = None,
+        retry: Retry | None = None,
+    ) -> Briefing:
+        if retry is None:
+            return super().write(payload, question, retry)
+        self.retries.append(retry)
+        text = TemplateProvider().write(dict(payload), question).text
+        return Briefing(text, "openai", "gpt-4o-mini")
+
+
+class _LiesDifferentlyOnRetry(_Liar):
+    """Invents one figure, then a different one when asked to rewrite."""
+
+    def write(
+        self,
+        payload: dict[str, object],
+        question: str | None = None,
+        retry: Retry | None = None,
+    ) -> Briefing:
+        if retry is None:
+            return super().write(payload, question, retry)
+        self.retries.append(retry)
+        text = "The battery earned 5,151.51 EUR, or 5,151.51 EUR before wear."
+        return Briefing(text, "openai", "gpt-4o-mini")
+
+
+class _FailsOnRetry(_Liar):
+    """Invents a figure, then cannot be reached for the second draft."""
+
+    def write(
+        self,
+        payload: dict[str, object],
+        question: str | None = None,
+        retry: Retry | None = None,
+    ) -> Briefing:
+        if retry is None:
+            return super().write(payload, question, retry)
+        raise NarrationError("the openai call failed: RateLimitError (HTTP 429)")
 
 
 class _Unreachable:
@@ -764,7 +817,10 @@ class _Unreachable:
     name = "openai"
 
     def write(
-        self, payload: dict[str, object], question: str | None = None
+        self,
+        payload: dict[str, object],
+        question: str | None = None,
+        retry: Retry | None = None,
     ) -> Briefing:
         raise NarrationError("the model returned an empty briefing")
 
@@ -786,6 +842,7 @@ def test_narrate_writes_a_briefing_about_the_page_the_operator_is_on(
     )
     assert body["unsupported"] == [] and str(days[0]) in body["text"]
     assert body["tab"] == "overview" and body["day"] == str(days[0])
+    assert body["attempts"] == 1
     assert set(body["follow_ups"]) == {
         "why_this_dispatch",
         "what_changed",
@@ -956,15 +1013,24 @@ def test_narrate_throws_away_prose_that_invents_a_figure(
     client: TestClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     days, _ = _days(settings)
-    monkeypatch.setattr(narration_provider, "build_provider", lambda *a, **k: _Liar())
+    liar = _Liar()
+    monkeypatch.setattr(narration_provider, "build_provider", lambda *a, **k: liar)
 
     body = client.post(
         "/api/narrate", json={"tab": "overview", "date": str(days[0])}
     ).json()
 
-    # The invented figure is named, and the deterministic writer answers instead.
+    # Two drafts, the second told what failed; then the deterministic writer.
+    assert body["attempts"] == 2 and len(liar.retries) == 2
+    assert liar.retries[0] is None
+    assert liar.retries[1] == Retry(
+        "The battery earned 4,242.42 EUR on the evening block.", ("4,242.42",)
+    )
+    # The figure is named once, although both drafts invented it.
     assert body["rejected"] == ["4,242.42"] and body["fell_back"] is True
-    assert "figures this page does not show" in body["fallback_reason"]
+    assert body["fallback_reason"] == (
+        "the briefing stated figures this page does not show, in 2 drafts"
+    )
     assert body["provider"] == "template" and body["grounded"] is True
     assert "4,242.42" not in body["text"]
 
@@ -984,4 +1050,58 @@ def test_narrate_falls_back_when_the_model_cannot_be_reached(
     assert body["fell_back"] is True and body["provider"] == "template"
     # Nothing was rejected: the model never answered, which is a different note.
     assert body["grounded"] is True and body["rejected"] == []
+    # A call that fails is not a refused draft, so it is not tried again here.
+    assert body["attempts"] == 1
     assert "empty briefing" in body["fallback_reason"]
+
+
+def test_narrate_shows_the_second_draft_when_it_passes_the_check(
+    client: TestClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    days, _ = _days(settings)
+    writer = _CorrectedOnRetry()
+    monkeypatch.setattr(narration_provider, "build_provider", lambda *a, **k: writer)
+
+    body = client.post(
+        "/api/narrate", json={"tab": "overview", "date": str(days[0])}
+    ).json()
+
+    assert writer.retries[-1] is not None
+    assert writer.retries[-1].rejected == ("4,242.42",)
+    assert body["provider"] == "openai" and body["attempts"] == 2
+    assert body["fell_back"] is False and body["fallback_reason"] is None
+    assert body["grounded"] is True and "4,242.42" not in body["text"]
+    # What the first draft got wrong stays visible.
+    assert body["rejected"] == ["4,242.42"]
+
+
+def test_narrate_falls_back_when_the_second_draft_cannot_be_reached(
+    client: TestClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    days, _ = _days(settings)
+    monkeypatch.setattr(
+        narration_provider, "build_provider", lambda *a, **k: _FailsOnRetry()
+    )
+
+    body = client.post(
+        "/api/narrate", json={"tab": "overview", "date": str(days[0])}
+    ).json()
+
+    assert body["provider"] == "template" and body["fell_back"] is True
+    assert body["attempts"] == 2 and body["rejected"] == ["4,242.42"]
+    assert "RateLimitError" in body["fallback_reason"]
+
+
+def test_narrate_names_the_figures_from_both_refused_drafts_once_each(
+    client: TestClient, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    days, _ = _days(settings)
+    writer = _LiesDifferentlyOnRetry()
+    monkeypatch.setattr(narration_provider, "build_provider", lambda *a, **k: writer)
+
+    body = client.post(
+        "/api/narrate", json={"tab": "overview", "date": str(days[0])}
+    ).json()
+
+    assert body["attempts"] == 2 and body["provider"] == "template"
+    assert body["rejected"] == ["4,242.42", "5,151.51"]

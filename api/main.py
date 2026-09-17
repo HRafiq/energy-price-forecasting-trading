@@ -328,14 +328,26 @@ def narrate(request: NarrateRequest, root: Root) -> dict[str, Any]:
     reason: str | None = None
     briefing: narration_provider.Briefing | None = None
     report: grounding.GroundingReport | None = None
+    retry: narration_provider.Retry | None = None
+    attempts = 0
     try:
-        written = provider.write(payload, question)
-        checked = grounding.check_grounding(written.text, payload)
-        if checked.grounded:
-            briefing, report = written, checked
-        else:
-            rejected = [claim.text for claim in checked.unsupported]
-            reason = "the briefing stated figures this page does not show"
+        # A refused draft is sent back once with the figures that failed; a second
+        # refusal hands the briefing to the template. There is no third draft.
+        while attempts < narration_provider.MAX_ATTEMPTS:
+            attempts += 1
+            written = provider.write(payload, question, retry)
+            checked = grounding.check_grounding(written.text, payload)
+            if checked.grounded:
+                briefing, report = written, checked
+                break
+            figures = tuple(dict.fromkeys(c.text for c in checked.unsupported))
+            rejected += [figure for figure in figures if figure not in rejected]
+            retry = narration_provider.Retry(written.text, figures)
+        if briefing is None:
+            reason = (
+                f"the briefing stated figures this page does not show, in {attempts} "
+                f"draft{'s' if attempts > 1 else ''}"
+            )
     except narration_provider.NarrationError as exc:
         reason = str(exc)
     if briefing is None or report is None:
@@ -355,6 +367,7 @@ def narrate(request: NarrateRequest, root: Root) -> dict[str, Any]:
         "grounded": report.grounded,
         "unsupported": [claim.text for claim in report.unsupported],
         "fell_back": reason is not None,
+        "attempts": attempts,
         "rejected": rejected,
         "fallback_reason": reason,
         "follow_ups": narration_provider.FOLLOW_UPS,

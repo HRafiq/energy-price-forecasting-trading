@@ -79,8 +79,9 @@ export function DeskBriefing({ tab, run, date = null, windowKey, battery }: Desk
 
       {briefing?.fell_back && (
         <p className="text-xs mt-2" style={{ color: C.muted }}>
-          {briefing.rejected.length > 0
-            ? `Written here instead: the model's draft named ${briefing.rejected.join(", ")}, which is not a number on this page.`
+          {briefing.rejected.length > 0 &&
+          briefing.fallback_reason?.startsWith("the briefing stated figures")
+            ? `Written here instead: the model's ${briefing.attempts > 1 ? "drafts" : "draft"} named ${briefing.rejected.join(", ")}, which this page does not show.`
             : `Written here instead: ${briefing.fallback_reason ?? "the model did not answer"}.`}
         </p>
       )}
