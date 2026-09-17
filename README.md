@@ -212,9 +212,9 @@ make dashboard  # build the React app and serve it with the API at http://127.0.
 make test       # ruff, strict mypy, pytest
 ```
 
-SMARD and Open-Meteo need no key. For ENTSO-E, register on the [Transparency Platform](https://transparency.entsoe.eu), email transparency@entsoe.eu asking for Restful API access, generate a token in your account settings and put `ENTSOE_API_KEY=<token>` in a gitignored `.env` file at the repository root. Downloads land in `data/raw/` and `data/processed/`, which are not committed.
+SMARD and Open-Meteo need no key. For ENTSO-E, register on the [Transparency Platform](https://transparency.entsoe.eu), email transparency@entsoe.eu asking for Restful API access, generate a token in your account settings and set it as `ENTSOE_API_KEY` in `.env` at the repository root: copy `.env.example` to `.env` to start, which is gitignored. Downloads land in `data/raw/` and `data/processed/`, which are not committed.
 
-The desk briefing calls a model. Put `OPENAI_API_KEY=<key>` in the same gitignored `.env` to use it; with no key the briefing is written from the same payload by a deterministic writer, so the dashboard and every test run without one.
+The desk briefing can call a model. Set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` in the same `.env`, or export it in your shell, which takes precedence over `.env`; with both set, `NARRATION_PROVIDER` chooses. With neither, the briefing is written from the same payload by a deterministic writer, so the dashboard and every test run without a key. Whichever writes it, every figure is checked against the page before it is shown.
 
 On an Apple M2 Pro with 10 cores, the eight-model comparison takes 88 minutes, the five validation backtest suites 17, and the hold-out forecasts 5.
 

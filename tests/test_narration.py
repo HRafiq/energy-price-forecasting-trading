@@ -406,3 +406,142 @@ def test_without_a_key_the_template_writes_and_with_one_the_model_would(
     # The model is selected, but nothing calls it here.
     assert isinstance(with_key, provider_mod.OpenAIProvider)
     assert with_key.name == "openai" and with_key.model == provider_mod.DEFAULT_MODEL
+
+
+def _env(tmp_path: Path, **settings: str) -> Path:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "".join(f"{name}={value}\n" for name, value in settings.items()),
+        encoding="utf-8",
+    )
+    return env_file
+
+
+def test_an_anthropic_key_alone_selects_anthropic(tmp_path: Path) -> None:
+    chosen = provider_mod.build_provider(_env(tmp_path, ANTHROPIC_API_KEY="a-key"))
+
+    assert isinstance(chosen, provider_mod.AnthropicProvider)
+    assert chosen.model == provider_mod.DEFAULT_ANTHROPIC_MODEL
+
+
+def test_with_both_keys_the_setting_chooses_and_openai_is_the_default(
+    tmp_path: Path,
+) -> None:
+    both = {"OPENAI_API_KEY": "o-key", "ANTHROPIC_API_KEY": "a-key"}
+
+    default = provider_mod.build_provider(_env(tmp_path, **both))
+    anthropic = provider_mod.build_provider(
+        _env(tmp_path, **both, NARRATION_PROVIDER="anthropic")
+    )
+    unmet = provider_mod.build_provider(
+        _env(tmp_path, OPENAI_API_KEY="o-key", NARRATION_PROVIDER="anthropic")
+    )
+
+    assert isinstance(default, provider_mod.OpenAIProvider)
+    assert isinstance(anthropic, provider_mod.AnthropicProvider)
+    # A choice without its key does not silently disable the key that is set.
+    assert isinstance(unmet, provider_mod.OpenAIProvider)
+
+
+def test_the_model_setting_is_read_from_the_env_file(tmp_path: Path) -> None:
+    chosen = provider_mod.build_provider(
+        _env(tmp_path, ANTHROPIC_API_KEY="a-key", NARRATION_MODEL="claude-sonnet-5")
+    )
+
+    assert chosen.model == "claude-sonnet-5"  # type: ignore[attr-defined]
+
+
+def test_a_choice_whose_key_is_missing_falls_back_without_its_model(
+    tmp_path: Path,
+) -> None:
+    standing_in = provider_mod.build_provider(
+        _env(
+            tmp_path,
+            ANTHROPIC_API_KEY="a-key",
+            NARRATION_PROVIDER="openai",
+            NARRATION_MODEL="gpt-4.1-mini",
+        )
+    )
+
+    assert isinstance(standing_in, provider_mod.AnthropicProvider)
+    # The model named for OpenAI would be refused by Anthropic on every call.
+    assert standing_in.model == provider_mod.DEFAULT_ANTHROPIC_MODEL
+
+
+def test_a_setting_in_the_environment_wins_over_the_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = _env(tmp_path, OPENAI_API_KEY="o-key", NARRATION_MODEL="from-file")
+    monkeypatch.setenv("NARRATION_MODEL", "from-shell")
+
+    chosen = provider_mod.build_provider(env_file)
+
+    assert chosen.model == "from-shell"  # type: ignore[attr-defined]
+
+
+def test_empty_settings_in_the_env_file_mean_no_key(tmp_path: Path) -> None:
+    chosen = provider_mod.build_provider(
+        _env(tmp_path, OPENAI_API_KEY="", ANTHROPIC_API_KEY="", NARRATION_PROVIDER="")
+    )
+
+    assert isinstance(chosen, provider_mod.TemplateProvider)
+
+
+class _Refusing:
+    """Stands in for an SDK client whose every call fails."""
+
+    def __init__(self, **_: object) -> None:
+        self.chat = self
+        self.completions = self
+        self.messages = self
+
+    def create(self, **_: object) -> object:
+        error = RuntimeError("invalid key sk-should-never-be-shown")
+        error.status_code = 401  # type: ignore[attr-defined]
+        raise error
+
+
+@pytest.mark.parametrize(
+    ("module", "client", "make"),
+    [
+        ("openai", "OpenAI", lambda: provider_mod.OpenAIProvider(api_key="k")),
+        ("anthropic", "Anthropic", lambda: provider_mod.AnthropicProvider(api_key="k")),
+    ],
+)
+def test_a_failed_call_becomes_a_narration_error_without_the_details(
+    monkeypatch: pytest.MonkeyPatch, module: str, client: str, make: Any
+) -> None:
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module(module), client, _Refusing)
+
+    with pytest.raises(provider_mod.NarrationError) as caught:
+        make().write(OVERVIEW)
+
+    message = str(caught.value)
+    assert "call failed: RuntimeError (HTTP 401)" in message
+    assert "sk-should-never-be-shown" not in message
+
+
+def test_the_anthropic_reply_is_read_from_its_text_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import anthropic
+
+    class _Block:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class _Answering(_Refusing):
+        def create(self, **_: object) -> object:
+            reply = type("Reply", (), {})()
+            reply.content = [_Block("First sentence. "), _Block("Second sentence.")]
+            return reply
+
+    monkeypatch.setattr(anthropic, "Anthropic", _Answering)
+
+    briefing = provider_mod.AnthropicProvider(api_key="k").write(OVERVIEW)
+
+    assert briefing.text == "First sentence. Second sentence."
+    assert briefing.provider == "anthropic"
+    assert briefing.model == provider_mod.DEFAULT_ANTHROPIC_MODEL

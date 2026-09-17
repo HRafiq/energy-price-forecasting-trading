@@ -369,9 +369,10 @@ matters here.
 used, in digits and in words alike: a figure typed into the question does not appear
 in the briefing as though the data held it.
 
-`provider` says who wrote the returned text: `openai` when `OPENAI_API_KEY` is set in
-the gitignored `.env`, and `template` otherwise or after a fallback. `grounded`
-describes the text actually returned. It is `true` in every response the endpoint
+`provider` says who wrote the returned text: `openai` or `anthropic` when that
+provider's key is set, in the environment or in the gitignored `.env` (see
+`.env.example`), and `template` otherwise or after a fallback. `grounded` describes
+the text actually returned. It is `true` in every response the endpoint
 produces, because prose that fails the check is replaced rather than returned; read
 `fell_back` and `fallback_reason` to see whether that happened.
 
