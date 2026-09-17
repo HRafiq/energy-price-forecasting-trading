@@ -243,7 +243,8 @@ are real.
 **Known issues**
 
 - **Load forecast gap on 31 January 2020.** SMARD has no load forecast for that
-  local day, 96 quarter-hours. The fill policy is a Phase 1 decision.
+  local day, 96 quarter-hours. No fill was added: the day stays missing, and each
+  model handles missing inputs itself.
 - **Solar is not exactly zero at night.** See the night-time solar figures in
   [data_guide_tables.md](figures/phase0/data_guide_tables.md). The forecast is
   zero there. Harmless for price modelling, but it matters for error ratios.

@@ -1,12 +1,12 @@
 # Production notes
 
-The failure catalogue for the forecasting and trading pipeline. Each entry records what can break,
-what we measured, and the mitigation. Measured facts are filled in as phases
-land; the "In my words" parts are for the project owner to write.
+The failure catalogue for the forecasting and trading pipeline. Each entry records
+what can break, what was measured, and the mitigation. Measured facts are filled in
+as phases land.
 
 ---
 
-## D1 · Missing or late upstream data (Phase 0: observed)
+## D1 · Missing or late upstream data (Phase 0: observed, Phase 7: fallback chain built)
 
 **Observed:** the build of 13 Sep 2026 found SMARD's prices for local day
 13 September missing, 96 quarter-hours, while prices for 14 September were
@@ -19,10 +19,9 @@ a later refresh.
 **Since Phase 1:** both baselines fill a missing source day from a second lag,
 then from the last published price, and record how many periods needed it.
 
-**Still to build, Phase 6 and 7:** the full fallback chain from the chosen model
-down to the baselines, and an incident record for each occurrence.
-
-**In my words:** _to write_
+**Built in Phase 7:** the live pipeline walks a fallback chain from the production
+model down to the two baselines (`src/pipeline/chain.py`), and every step down writes
+an incident to the health log (`src/health/incidents.py`). D5 describes it.
 
 ## D2 · Data revisions (Phase 0: partial)
 
@@ -47,8 +46,6 @@ verification pass; the regression test is
 **Not done yet:** detecting revisions by diffing a re-fetched chunk against its
 cached copy, and snapshotting training data as-of a date.
 
-**In my words:** _to write_
-
 ## D3 · DST days (Phase 0: test passing)
 
 **What breaks:** a delivery day in Europe/Berlin has 23 hourly periods in March
@@ -69,9 +66,10 @@ report checks every day's row count against the DST calendar. Tests:
 
 **Observed gap:** SMARD has no load forecast for local day 2020-01-31, all
 24 hours. The quality report lists it and the forecast residual load is NaN
-there. How to fill such gaps is a Phase 1 decision.
-
-**In my words:** _to write_
+there. No fill was added: the day stays NaN in the dataset. LightGBM reads missing
+values natively, the quantile forest replaces them with a sentinel and LEAR with
+training medians, and the day lies outside every training window of the validation
+and hold-out runs.
 
 ## D4 · Granularity change (Phase 0: policy set)
 
@@ -98,9 +96,7 @@ differs from it, and ingestion raises `GranularityError` if the data's step
 differs. Pre-switch rows carry `price_product_minutes = 60`, and the quality
 report fails if any pre-switch hour has differing quarter-hour prices.
 
-**In my words:** _to write_
-
-## M3 · Leakage in disguise (Phase 0: risk found in the data source)
+## M3 · Leakage in disguise (Phase 0: found, Phase 1: enforced, Phase 2: measured)
 
 **What breaks:** a feature that is not known at 12:00 on day D, when bids for
 day D+1 close. A backtest using it looks better than any live system can be.
@@ -130,15 +126,13 @@ over 1 June 2025 to 31 May 2026, on three feature sets.
 | feature set | mean pinball | change vs honest | MAE of median, EUR/MWh | spike days, mean pinball |
 |---|---|---|---|---|
 | honest, gate-available only | 4.57 | 0% | 14.22 | 6.85 |
-| adds grid-operator D+1 forecasts, published 18:00 | 3.95 | −13.6% | 12.57 | 6.44 |
-| adds measured D+1 wind, solar and load | 4.00 | −12.5% | 12.72 | 6.24 |
+| adds grid-operator D+1 forecasts, published 18:00 | 3.95 | -13.6% | 12.57 | 6.44 |
+| adds measured D+1 wind, solar and load | 4.00 | -12.5% | 12.72 | 6.24 |
 
 The post-gate forecasts flatter the backtest almost exactly as much as true
 actuals do, because they track actuals so closely. Every reported model uses
 only the honest set; a dashboard built on either leaky set would promise errors
 about 13% smaller than live trading could deliver.
-
-**In my words:** _to write_
 
 ## M3 · Leakage through a weather archive (Phase 2: found and blocked)
 
@@ -157,8 +151,6 @@ stays visible at 11:40. A cached chunk only counts as settled when it ended well
 before the download day; the first version compared with the requested end date
 instead, which an independent review showed could cache fresher values for good.
 
-**In my words:** _to write_
-
 ## D1 · Gaps in fuel prices (Phase 2: observed)
 
 **Observed:** the TTF gas ticker follows the US exchange calendar and misses 76
@@ -172,8 +164,6 @@ erased months of the gas crisis.
 **Mitigation:** fuel columns carry the last price published before each day, so
 a missing day repeats the previous price. Gas prices move slowly day to day, so
 a one-day repeat costs little; a three-week carbon pause is visible in the data.
-
-**In my words:** _to write_
 
 ---
 
@@ -192,8 +182,6 @@ never MAPE.
 **Mitigation:** one binary per period forbids charging and discharging at once.
 Settlement multiplies the price by net power, so buying at a negative price earns
 money.
-
-**In my words:** _to write_
 
 ---
 
@@ -231,8 +219,6 @@ Details: `docs/results/t4_imbalance.md`.
 position on the intraday market instead of leaving it to reBAP, and hold back
 energy on days when the evening carries spike risk.
 
-**In my words:** _to write_
-
 ---
 
 ## T5 · Price-taker assumption (Phase 3: stated)
@@ -246,8 +232,6 @@ into the evening peak lowers that peak.
 Orders are volumes without limit prices, so a forecast strategy can buy into a
 surprise spike; a desk would bid price-quantity curves. The P&L is trading margin
 net of wear.
-
-**In my words:** _to write_
 
 ---
 
@@ -283,10 +267,9 @@ October 2025 an hourly product takes the direction of its mean error.
   validation gap. When the forecast puts the solar valley too high, the battery
   buys too little or in the wrong quarter-hours.
 
-**Mitigation:** the upper quantiles in the evening matter most; spike prediction
-(M5) and drift monitoring of evening coverage target this directly.
-
-**In my words:** _to write_
+**Mitigation, not yet built:** the upper quantiles from 15:00 to 21:00 matter most,
+as the two follow-up notes below show. No spike model is built, and the drift monitor
+(M2) pools coverage over all periods rather than watching the evening.
 
 ---
 
@@ -315,8 +298,8 @@ windows have intervals about 25 to 40 points wide that include zero (moving-bloc
 bootstrap over weeks). The data cannot tell sunset from the clock, and the claim that
 the losses follow sunset is not made.
 
-**What is clear:** about 40% of the gap is lost between 15:00 and 21:00, 43% from June to
-September and 39% from October to May, though the difference between those two is not
+**What is clear:** about 40% of the gap is lost between 15:00 and 21:00, 43% from June
+to September and 39% from October to May, though the difference between those two is not
 pinned down. Within that window the loss shifts with the season beyond noise. On the
 clock, 18:00 to 20:59 takes 19.6 points more of the gap in summer (95% interval +5.2 to
 +39.9) and 15:00 to 17:59 takes 15.7 points less (-28.2 to -2.9). Against sunset the
@@ -325,8 +308,6 @@ and the three hours after it 27.8 points less.
 
 **What it changes:** a fix aimed at the 18:00 to 21:00 evening peak alone would target a
 block that carries 16% of the winter gap. The window to target is 15:00 to 21:00.
-
-**In my words:** _to write_
 
 ---
 
@@ -389,8 +370,6 @@ fixed before the run. Two risks are named in advance: the median schedule alread
 sells slightly more in the window than perfect foresight, and a change in the window
 alone leaves the midday over-forecast cost untouched.
 
-**In my words:** _to write_
-
 ---
 
 ## T2 · Error cost is not error size (Phase 4: measured)
@@ -422,8 +401,6 @@ quantile forest, whose wide ranges make it hold back too often.
 **Mitigation:** judge forecasts by the profit they produce as well as their error,
 and look at timing and spreads in the spread-defining hours.
 
-**In my words:** _to write_
-
 ---
 
 ## T3 · Wear against revenue (Phase 4: measured)
@@ -449,8 +426,6 @@ wear peaks when the optimizer is given the true wear.
 **Mitigation:** price wear at its true cost in the optimizer, and keep a cycle cap
 as the warranty limit.
 
-**In my words:** _to write_
-
 ---
 
 ## D1 · A delivery day without prices (Phase 4: observed)
@@ -461,8 +436,6 @@ for delivery day 13 September 2026, while the days either side were complete.
 **Mitigation:** the backtest checks every day for complete prices and forecasts
 before trading it, skips an incomplete day and lists it with the reason in the run
 notes, so a gap cannot turn into a silent zero-profit day.
-
-**In my words:** _to write_
 
 ---
 
@@ -475,7 +448,8 @@ better than it will trade. Every look at a result is a chance to fit noise.
 the headline strategy, was made on the validation window, 1 June 2024 to 31 May
 2026, and recorded before any hold-out forecast existed. The hold-out, 1 June to
 14 September 2026, was then forecast walk-forward once and traded once. Both
-commands refuse to run without an explicit confirmation and refuse a second run.
+commands refuse to run without an explicit confirmation, and refuse a second run
+unless told to overwrite.
 
 **Measured,** production model, median dispatch:
 
@@ -495,16 +469,16 @@ the production model's lead over naive narrowed from 13.6 to 6.9 points. LightGB
 quantile again traded better than the production model, as on validation; the
 production model was not changed on hold-out evidence.
 
-**Mitigation:** the coverage drop is what drift monitoring (M2, Phase 6) is meant to
-catch, with an alert when rolling 90% coverage falls below its threshold.
-
-**In my words:** _to write_
+**Mitigation:** the drift monitor (M2) was built in Phase 6. On the hold-out its
+coverage signal alerted only on 11 September 2026, while the pinball ratio alerted from
+2 July, so both signals are needed.
 
 ---
 
-Phase 6 adds M2, M1, D1 and D5 below; Phase 8 adds M5; the live runs add a second
-D1 entry, on the day being forecast; and follow-ups to T1 and M1 ask whether the
-losses follow sunset and whether weekly refits pay.
+Phase 6 adds M2, M1, D1 and D5 below, and Phase 7 extends D5 with the live chain.
+Phase 8 and the briefing work after it add two M5 entries, the live runs add a D1
+entry on the day being forecast, and a follow-up to M1 asks whether weekly refits pay.
+The T1 follow-ups sit with T1 above.
 
 ## M2 · Drift monitoring (Phase 6: measured)
 
@@ -525,17 +499,16 @@ on 2 July 2026, 31 days after the start, and was in alert on 6.7% of 105 traded
 days. The coverage signal first alerted only on 11 September 2026, 102 days after
 the start, on 2.9% of days. Coverage over the whole hold-out was 77.8%, but its
 28-day rolling value stayed above 74% until September: a validation run in spring
-2026 that fell to 62.6% had already set a low bar. Each alert run writes one drift incident for retraining review, 9 in total; 5 of
-them fall in the validation window whose days set the thresholds, so they are
-in-sample.
+2026 that fell to 62.6% had already set a low bar. Each alert run writes one drift
+incident for retraining review, 9 in total; 5 of them fall in the validation window
+whose days set the thresholds, so they are in-sample.
 
 **Mitigation:** run both signals. On the hold-out the pinball ratio alerted first, but
 that is one observation: on validation the longest coverage alert, 28 days from 20
 March 2026, came with no pinball alert at all. A coverage threshold chosen on a window
-that contains its own deep dip reacts late. Which signal leads in the live pipeline is
-decided on validation episodes, not on the hold-out.
-
-**In my words:** _to write_
+that contains its own deep dip reacts late. The live pipeline does not run the monitor
+yet; the dashboard shows the saved validation and hold-out result. When it does, which
+signal leads should be decided on validation episodes, not on the hold-out.
 
 ---
 
@@ -548,20 +521,21 @@ behind and the battery trades on stale spreads.
 
 **Measured:** LightGBM with conformal ranges, 730 training days, no weather features,
 walked through 1 January 2021 to 31 December 2023. Fitted once on 2019 to 2020 prices
-(mean 34 €/MWh, 99th percentile 73 €/MWh), its median peaked at 100.35 €/MWh while prices reached 871 €/MWh. Its 90% coverage was 25.7% over the three years, 6.2% in
+(mean 34 €/MWh, 99th percentile 73 €/MWh), its median peaked at 100.35 €/MWh while
+prices reached 871 €/MWh. Its 90% coverage was 25.7% over the three years, 6.2% in
 2022 and 2.4% in 2022Q3; its lowest rolling 28-day coverage was 0.1%. It captured
 28.9% of perfect foresight, €61,880 against €214,142. Refitting every 91 days gave
 77.1% coverage and 73.5% capture (€157,475); every 28 days, the production cadence,
 80.6% and 80.7% (€172,807). Refits still lag fast moves: quarterly fell to 47.7%
 coverage in 2022Q3, and monthly to 44.4% over 28 days in autumn 2021.
 
-**Mitigation:** refit at least every 28 days, and alert on rolling coverage and the
-pinball ratio (M2) so a jump in price level triggers an early refit instead of
-waiting for the schedule. Keep the previous-day baseline running as a fallback: it re-anchors on yesterday's
-prices every day and covered 86.2% over the three years, though its rolling 28-day
-coverage fell to 58.8% in autumn 2021 and it captured only 69.8%.
-
-**In my words:** _to write_
+**Mitigation:** refit at least every 28 days, as the backtests do, and alert on rolling
+coverage and the pinball ratio (M2) so a jump in price level triggers an early refit.
+The live pipeline does not do either yet: it serves a model version registered by hand,
+and no drift alert triggers a refit. Keep the previous-day baseline running as a
+fallback: it re-anchors on yesterday's prices every day and covered 86.2% over the three
+years, though its rolling 28-day coverage fell to 58.8% in autumn 2021 and it captured
+only 69.8%.
 
 ---
 
@@ -582,17 +556,16 @@ full model. It recovers about half of the loss and keeps the ranges honest. The
 baselines lose far more: naive previous day captured 77.6% (€20,662 less) and
 seasonal naive previous week 79.7% (€17,206 less).
 
-**Mitigation:** keep a model trained without the feed ready as the first fallback,
-rather than running the full model on empty inputs. Among the baselines, naive
-previous day has the lower pinball loss, 9.61 against 11.49, but seasonal naive
-earned more here; the D5 chain keeps the order fixed before this run, by pinball
-loss.
-
-**In my words:** _to write_
+**Mitigation, built in Phase 7:** the live chain's first fallback is the production
+model without weather features, fitted when a run needs it, rather than the full model
+on empty inputs. Among the baselines, naive previous day has the lower pinball loss,
+9.61 against 11.49, but seasonal naive earned more here; the D5 simulation keeps the
+order fixed before this run, by pinball loss, and the live chain puts seasonal naive
+first, on validation profit.
 
 ---
 
-## D5 · The 12:00 deadline (Phase 6: simulated)
+## D5 · The 12:00 deadline (Phase 6: simulated, Phase 7: built)
 
 **What breaks:** the gate closes at 12:00 whether or not the pipeline worked. A day
 without a forecast by then is a day without a position.
@@ -608,40 +581,40 @@ baseline, so every forecast was submitted before the gate, the latest 10.0 minut
 after the 11:40 issue time. That share follows from the assumptions: a hung step or
 a longer wait is not simulated.
 
-**Simulated result:** 95 days needed a fallback: 64 used the model without weather, 19 naive
-previous day and 12 seasonal naive. With the chain, median dispatch earned €148,660,
-89.6% of perfect foresight, €838 below the full model every day. Without it, those
-95 days have no position: 87.0% of days are traded and profit falls to €132,762,
-80.0% capture. Against that counterfactual of no position on failed days, the chain keeps €15,898
-over the two years. Most of it comes from trading at all: on the 64 days when only
-the weather feed was late, running the full model on empty weather inputs would have
-earned €11,253 against €11,311 for the model without weather, €59 less. Each fallback
-day writes an incident marked as simulated: 76 late data, 19 pipeline.
+**Simulated result:** 95 days needed a fallback: 64 used the model without weather, 19
+naive previous day and 12 seasonal naive. With the chain, median dispatch earned
+€148,660, 89.6% of perfect foresight, €838 less over the two years than running the full
+model on every day. Without it, those 95 days have no position: 87.0% of days are traded
+and profit falls to €132,762, 80.0% capture. Against that counterfactual of no position
+on failed days, the chain keeps €15,898 over the two years. Most of it comes from
+trading at all: on the 64 days when only the weather feed was late, running the full
+model on empty weather inputs would have earned €11,253 against €11,311 for the model
+without weather, €59 less. Each fallback day writes an incident marked as simulated: 76
+late data, 19 pipeline.
 
-**Mitigation:** the chain itself, with a hard stop on every step so a hung model
-falls through to a baseline instead of waiting past the gate. Phase 7 implements it
-as the Airflow sensor and branch, with one change decided on validation profit: the
-live chain puts seasonal naive ahead of naive previous day, because it earned
+**Mitigation:** the chain itself. Phase 7 builds it as the Airflow sensor and branch,
+but a hard stop on each step is not built yet: the sensor gives up on late feeds, while
+a model step that hangs has no time limit. One change was decided on validation profit:
+the live chain puts seasonal naive ahead of naive previous day, because it earned
 €132,292 against €128,836 on the same 730 days, 79.7% of perfect foresight against
 77.6%, although its pinball loss is worse, 11.49 against 9.61. The experiment above
 keeps the order it was frozen with, so its numbers stand as reported.
 
-**Built in Phase 7:** the chain is no longer only a simulation. The daily pipeline
-runs it for real: a readiness check reports each feed separately, the chain steps
-down when one is late, and every fallback writes an incident with the step used and
-the time the forecast went out. A first live run for 17 September 2026 reported the
-load forecast and weather unpublished, skipped the production and no-weather rungs,
-and committed a seasonal naive schedule worth €783. The run for 18 September later hit
-the same 0 of 96 while SMARD held the full load forecast, so the pipeline rather than
-the feeds was at fault, as the D1 entry on the day being forecast explains. A run for
-16 September, whose feeds were complete, used the production model served from the
-MLflow registry and committed €289. Airflow 3 removed task-level SLAs, and its
-DAG-level deadline alerts crashed the end-to-end test run, so the deadline is a task
-of its own: after the export, it
-compares the time the forecast went out with the 12:00 gate from the run record
-and writes a critical pipeline incident when the schedule was committed late.
-
-**In my words:** _to write_
+**Built in Phase 7:** the chain is no longer only a simulation. The daily pipeline runs
+it for real: a readiness check reports each feed separately, the chain steps down when
+one is late, and every fallback writes an incident with the step used and the time the
+forecast went out. A first live run for 17 September 2026 reported the load forecast and
+weather unpublished, skipped the production and no-weather rungs, and committed a
+seasonal naive schedule planned at €783 that settled at €405; it was started by hand at
+13:21 Berlin on 16 September, 81 minutes after the gate. The run for 18 September later
+hit the same 0 of 96 while SMARD held the full load forecast, so the pipeline rather
+than the feeds was at fault, as the D1 entry on the day being forecast explains. A run
+for 16 September, whose feeds were complete, used the production model served from the
+MLflow registry; started by hand a day late, its schedule was planned at €289 and
+settled at €308. Airflow 3 removed task-level SLAs, and its DAG-level deadline alerts
+crashed the end-to-end test run, so the deadline is a task of its own: after the export,
+it compares the time the forecast went out with the 12:00 gate from the run record and
+writes a critical pipeline incident when the schedule was committed late.
 
 ---
 
@@ -733,11 +706,9 @@ that exists nowhere in the data, which is the one that cannot be argued with.
 so the grounding path and the fallback are exercised on every run with no network
 and no spend. Why the model is off by default is the next note.
 
-**In my words:** _to write_
-
 ---
 
-## M5 · A grounded briefing that misreads the page (Phase 8: measured, left out by choice)
+## M5 · A grounded briefing that misreads the page (after Phase 8: measured, left out by choice)
 
 **What breaks:** the grounding check proves that every figure in a briefing is on
 the page. It cannot prove that the sentence gives the figure its right meaning, and
@@ -790,8 +761,6 @@ live record, so the workflow is intentionally not built. It becomes worth buildi
 when the briefing is expected to explain rather than restate: answering the
 follow-up questions properly, or a question the operator types.
 
-**In my words:** _to write_
-
 ---
 
 ## D1 · The day being forecast, trimmed away (live: found and fixed)
@@ -828,8 +797,6 @@ once by hand, on 16 September, without changing the settled figure. A bid is fin
 the gate, so the daily run now refuses to replace a committed schedule unless told to
 with `--replace`.
 
-**In my words:** _to write_
-
 ---
 
 ## M1 · Weekly against 28-day refits (validation: measured)
@@ -862,11 +829,10 @@ anywhere, did not earn measurably more. That is the decision-value finding again
 battery profit turns on the timing and shape of the price curve, which pinball averages
 over, and a difference this small cannot be told apart from noise in two years. Compute
 is not the obstacle, since the weekly arm's 793 days ran in 16 minutes on this machine.
-The cost would be operational: in production a refit means training, checking and
-registering a model version every week instead of every four.
+The cost would be operational: in the live pipeline, where a model version is
+registered by hand today, weekly refits would mean training, checking and registering
+a version every week instead of every four.
 
 **Not tested:** a regime shift. Faster refits should matter most when prices move
 quickly, as in 2021 to 2023, and this run covers only the calmer validation window. The
 hold-out cannot be used to decide it.
-
-**In my words:** _to write_
