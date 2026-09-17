@@ -212,7 +212,7 @@ def test_windows_select_their_days(client: TestClient, window: str, days: int) -
     [{"duration": 5}, {"power": 0.7}, {"strategy": "q30"}, {"window": "last7"}],
 )
 def test_invalid_parameters_are_refused(
-    client: TestClient, params: dict[str, object]
+    client: TestClient, params: dict[str, str | int | float]
 ) -> None:
     assert client.get(f"/api/runs/{RUN}/summary", params=params).status_code == 422
 
@@ -627,7 +627,7 @@ def test_incidents_newest_first_with_faceted_counts(
     ],
 )
 def test_invalid_incident_queries_are_refused(
-    health_client: TestClient, params: dict[str, object]
+    health_client: TestClient, params: dict[str, str | int | float]
 ) -> None:
     response = health_client.get("/api/model-health/incidents", params=params)
     assert response.status_code == 422 and response.json()["detail"]
@@ -735,7 +735,7 @@ def test_a_same_timestamp_rewrite_is_picked_up_by_its_size(
     [{"limit": 0}, {"type": "outage"}, {"start": "2025-02-30"}, {"offset": -1}],
 )
 def test_a_bad_incident_query_is_refused_before_the_missing_export(
-    client: TestClient, params: dict[str, object]
+    client: TestClient, params: dict[str, str | int | float]
 ) -> None:
     model_health.clear_cache()
     response = client.get("/api/model-health/incidents", params=params)

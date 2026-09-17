@@ -527,7 +527,7 @@ export interface NarrateResponse {
   day: string;
   window: WindowKey;
   text: string;
-  /** "openai" when a key is configured, "template" otherwise or after a fallback. */
+  /** "openai" or "anthropic" when a key is set, "template" otherwise or after a fallback. */
   provider: string;
   model: string | null;
   /** Every figure in `text` was found in the payload the briefing was given. */

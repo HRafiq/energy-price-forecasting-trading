@@ -640,8 +640,8 @@ is in the payload as the duration. Catching that would mean tying each sentence 
 the key it describes, which this does not attempt. What it does catch is the figure
 that exists nowhere in the data, which is the one that cannot be argued with.
 
-**Without a key:** `OPENAI_API_KEY` is optional. With no key the deterministic writer
-answers every request, which is what the test suite runs against, so the grounding
+**Without a key:** `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are optional. With
+neither key the deterministic writer answers every request, which is what the test suite runs against, so the grounding
 path and the fallback are exercised on every run with no network and no spend.
 
 **In my words:** _to write_

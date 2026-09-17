@@ -6,11 +6,14 @@ payload (:mod:`src.narration.payload`) and may use nothing else, and every figur
 it writes is checked afterwards (:mod:`src.narration.grounding`). A briefing whose
 numbers fail that check is never shown.
 
-Two providers implement the same interface:
+Three providers implement the same interface:
 
-* :class:`OpenAIProvider` calls the OpenAI API with ``OPENAI_API_KEY`` from the
-  gitignored ``.env``. Without a key it is not selected, so the repository runs
-  and its tests pass with no key and no network.
+* :class:`OpenAIProvider` calls the OpenAI API with ``OPENAI_API_KEY``, and
+  :class:`AnthropicProvider` the Anthropic API with ``ANTHROPIC_API_KEY``, both
+  read from the environment or the gitignored ``.env`` (see ``.env.example``).
+  Without a key neither is selected, so the repository runs and its tests pass
+  with no key and no network. A failed call, a wrong key or a rate limit, becomes
+  a ``NarrationError``, so the caller falls back rather than failing.
 * :class:`TemplateProvider` writes the same brief from the payload with fixed
   sentences. It is what answers when no key is set, what the tests use, and the
   fallback when a call fails or comes back ungrounded.
@@ -32,22 +35,32 @@ from src.config import REPO_ROOT
 __all__ = [
     "BRIEFING_RULES",
     "FOLLOW_UPS",
+    "AnthropicProvider",
     "Briefing",
     "NarrationError",
     "OpenAIProvider",
     "Provider",
     "TemplateProvider",
     "build_provider",
+    "env_value",
     "load_api_key",
 ]
 
-#: The environment variable holding the key. Put it in the gitignored .env as
-#: OPENAI_API_KEY=sk-...; nothing in the repository ever stores a key.
+#: The environment variables holding the keys, set in the gitignored .env (see
+#: .env.example). Nothing in the repository ever stores a key.
 API_KEY_ENV = "OPENAI_API_KEY"
-#: Small and quick: a briefing is a few sentences over a payload of a few hundred
-#: numbers. Override with NARRATION_MODEL.
+ANTHROPIC_KEY_ENV = "ANTHROPIC_API_KEY"
+#: Which provider answers when both keys are set: "openai" or "anthropic".
+PROVIDER_ENV = "NARRATION_PROVIDER"
+#: A briefing is a few sentences over a payload of a few hundred numbers, so both
+#: defaults are the providers' small, cheap models. Override with NARRATION_MODEL.
 DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 MODEL_ENV = "NARRATION_MODEL"
+MAX_TOKENS = 320
+#: One retry at most: a briefing that has not arrived in about a minute is replaced
+#: by the template rather than holding the page.
+MAX_RETRIES = 1
 #: The canned questions under each briefing.
 FOLLOW_UPS = {
     "why_this_dispatch": "Why this dispatch?",
@@ -94,23 +107,40 @@ class Provider(Protocol):
         """Three to five sentences about ``payload``, answering ``question``."""
 
 
-def load_api_key(env_path: Path | None = None) -> str | None:
-    """The OpenAI key from the environment, or from the gitignored .env.
-
-    Never returns the key to a caller that logs it: the provider holds it and the
-    response only ever says which provider answered.
-    """
-    key = os.environ.get(API_KEY_ENV)
-    if key:
-        return key.strip() or None
+def env_value(name: str, env_path: Path | None = None) -> str | None:
+    """A setting from the environment, else from the gitignored .env; None if empty."""
+    value = os.environ.get(name)
+    if value is not None and value.strip():
+        return value.strip()
     path = env_path or REPO_ROOT / ".env"
     if not path.exists():
         return None
     for line in path.read_text(encoding="utf-8").splitlines():
-        name, _, value = line.partition("=")
-        if name.strip() == API_KEY_ENV:
-            return value.strip().strip('"').strip("'") or None
+        key, _, raw = line.partition("=")
+        if key.strip() == name:
+            return raw.strip().strip('"').strip("'") or None
     return None
+
+
+def load_api_key(env_path: Path | None = None, name: str = API_KEY_ENV) -> str | None:
+    """A provider key from the environment, or from the gitignored .env.
+
+    Never returns the key to a caller that logs it: the provider holds it and the
+    response only ever says which provider answered.
+    """
+    return env_value(name, env_path)
+
+
+def _user_message(payload: dict[str, Any], question: str | None) -> str:
+    ask = question or "Write the briefing for this tab."
+    return f"{ask}\n\nPayload:\n{json.dumps(payload, indent=2)}"
+
+
+def _call_failed(provider: str, exc: Exception) -> str:
+    """Why a call failed, without anything the exception carries about the request."""
+    status = getattr(exc, "status_code", None)
+    detail = f" (HTTP {status})" if isinstance(status, int) else ""
+    return f"the {provider} call failed: {type(exc).__name__}{detail}"
 
 
 def _sentence(value: Any, unit: str = "", places: int = 2) -> str:
@@ -268,35 +298,95 @@ class OpenAIProvider:
 
     def write(self, payload: dict[str, Any], question: str | None = None) -> Briefing:
         try:
-            from openai import OpenAI  # type: ignore[import-not-found]
-        except ModuleNotFoundError as exc:  # pragma: no cover - depends on the extra
+            from openai import OpenAI
+        except ModuleNotFoundError as exc:  # pragma: no cover - depends on the install
             raise NarrationError(
-                "the openai package is not installed; add it with "
-                "`uv add openai` or leave OPENAI_API_KEY unset to use the template"
+                "the openai package is not installed; run `uv sync` or leave "
+                "OPENAI_API_KEY unset to use the template"
             ) from exc
-        client = OpenAI(api_key=self.api_key, timeout=self.timeout_s)
-        ask = question or "Write the briefing for this tab."
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": BRIEFING_RULES},
-                {
-                    "role": "user",
-                    "content": f"{ask}\n\nPayload:\n{json.dumps(payload, indent=2)}",
-                },
-            ],
-            temperature=0.2,
-            max_tokens=320,
-        )
-        text = (response.choices[0].message.content or "").strip()
+        try:
+            client = OpenAI(
+                api_key=self.api_key, timeout=self.timeout_s, max_retries=MAX_RETRIES
+            )
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": BRIEFING_RULES},
+                    {"role": "user", "content": _user_message(payload, question)},
+                ],
+                temperature=0.2,
+                max_tokens=MAX_TOKENS,
+            )
+        except Exception as exc:
+            raise NarrationError(_call_failed(self.name, exc)) from exc
+        choices = response.choices or []
+        text = (choices[0].message.content or "").strip() if choices else ""
+        if not text:
+            raise NarrationError("the model returned an empty briefing")
+        return Briefing(text, self.name, self.model)
+
+
+@dataclass
+class AnthropicProvider:
+    """Calls the Anthropic API, and refuses to answer without a key."""
+
+    api_key: str
+    model: str = DEFAULT_ANTHROPIC_MODEL
+    name: str = "anthropic"
+    timeout_s: float = 30.0
+
+    def write(self, payload: dict[str, Any], question: str | None = None) -> Briefing:
+        try:
+            from anthropic import Anthropic
+        except ModuleNotFoundError as exc:  # pragma: no cover - depends on the install
+            raise NarrationError(
+                "the anthropic package is not installed; run `uv sync` or leave "
+                "ANTHROPIC_API_KEY unset to use the template"
+            ) from exc
+        try:
+            client = Anthropic(
+                api_key=self.api_key, timeout=self.timeout_s, max_retries=MAX_RETRIES
+            )
+            response = client.messages.create(
+                model=self.model,
+                max_tokens=MAX_TOKENS,
+                system=BRIEFING_RULES,
+                messages=[
+                    {"role": "user", "content": _user_message(payload, question)}
+                ],
+            )
+        except Exception as exc:
+            raise NarrationError(_call_failed(self.name, exc)) from exc
+        text = "".join(getattr(block, "text", "") for block in response.content).strip()
         if not text:
             raise NarrationError("the model returned an empty briefing")
         return Briefing(text, self.name, self.model)
 
 
 def build_provider(env_path: Path | None = None) -> Provider:
-    """The model when a key is configured, the template writer otherwise."""
-    key = load_api_key(env_path)
-    if not key:
-        return TemplateProvider()
-    return OpenAIProvider(api_key=key, model=os.environ.get(MODEL_ENV, DEFAULT_MODEL))
+    """The model whose key is set, or the template writer when none is.
+
+    Each setting is read from the environment first, then from .env.
+    ``NARRATION_PROVIDER`` is honoured when its key is set; otherwise whichever key
+    is set answers, OpenAI first. ``NARRATION_MODEL`` overrides the default model,
+    but not for a provider standing in for the one ``NARRATION_PROVIDER`` named: a
+    model name belongs to one provider, and the other would refuse it on every call.
+    """
+    openai_key = env_value(API_KEY_ENV, env_path)
+    anthropic_key = env_value(ANTHROPIC_KEY_ENV, env_path)
+    choice = (env_value(PROVIDER_ENV, env_path) or "").lower()
+    model = env_value(MODEL_ENV, env_path)
+
+    def chosen_model(name: str, default: str) -> str:
+        return model if model and choice in ("", name) else default
+
+    if anthropic_key and (choice == "anthropic" or not openai_key):
+        return AnthropicProvider(
+            api_key=anthropic_key,
+            model=chosen_model("anthropic", DEFAULT_ANTHROPIC_MODEL),
+        )
+    if openai_key:
+        return OpenAIProvider(
+            api_key=openai_key, model=chosen_model("openai", DEFAULT_MODEL)
+        )
+    return TemplateProvider()

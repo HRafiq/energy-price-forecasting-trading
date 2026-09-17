@@ -27,6 +27,8 @@ dependencies = [
     "pulp>=3.3,<4",
     "fastapi==0.141.1",
     "uvicorn==0.52.4",
+    "openai>=3.14.1,<4",
+    "anthropic>=1.6.0,<2",
 ]
 
 [project.optional-dependencies]
