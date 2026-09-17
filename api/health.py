@@ -16,7 +16,8 @@ The M1 file's ``coverage_alert_threshold`` is not served: the drift threshold co
 from M2.
 
 Each incident carries a provenance category: ``observed`` (fixed rules over saved
-backtest outputs), ``measured`` (the M2 drift monitor over real saved forecasts) or
+backtest outputs, and the live pipeline's own runs), ``measured`` (the drift monitor
+over real saved forecasts, in the M2 experiment and in the live daily check) or
 ``simulated`` (failure injection, D5), and ``in_sample`` when the record says whether
 its day lies in the window its threshold was fitted on.
 """
@@ -42,6 +43,7 @@ __all__ = [
     "INCIDENT_TYPES",
     "MAX_LIMIT",
     "MEASURED_SOURCES",
+    "OBSERVED_SOURCES",
     "SIMULATED_SOURCES",
     "Health",
     "check_incident_query",
@@ -65,8 +67,12 @@ HEALTH_FILES = {
 DRIFT_WINDOWS = ("validation", "holdout", "all")
 INCIDENT_TYPES: tuple[str, ...] = get_args(IncidentType)
 MAX_LIMIT = 500
-#: Sources whose incidents are measured on real saved forecasts.
-MEASURED_SOURCES = frozenset({"m2_drift"})
+#: Sources whose incidents record real events: the fixed rules over saved backtest
+#: outputs, and the live pipeline's own runs.
+OBSERVED_SOURCES = frozenset({OBSERVED, "pipeline"})
+#: Sources whose incidents are measured on real saved forecasts: the M2 experiment
+#: and the live pipeline's daily drift check.
+MEASURED_SOURCES = frozenset({"m2_drift", "live_drift"})
 #: Sources whose incidents come from failure injection, not from real operations.
 SIMULATED_SOURCES = frozenset({"d5_deadline"})
 SOURCE_PATTERN = re.compile(r"[a-z0-9_]+")
@@ -238,7 +244,7 @@ def provenance(source: str) -> str:
     from the fixed rules over saved outputs, and nothing vouches that it measured
     real operations.
     """
-    if source == OBSERVED:
+    if source in OBSERVED_SOURCES:
         return "observed"
     if source in MEASURED_SOURCES:
         return "measured"

@@ -279,7 +279,7 @@ export interface DriftResponse {
   series: DriftPoint[];
 }
 
-/** observed: fixed rules over saved outputs; measured: drift monitor; simulated: failure injection. */
+/** observed: fixed rules over saved outputs, live pipeline runs; measured: drift monitor, M2 and live; simulated: failure injection. */
 export type Provenance = "observed" | "measured" | "simulated";
 
 export interface Incident {

@@ -17,7 +17,7 @@ A probabilistic price forecaster feeding a battery dispatch optimiser, backteste
 | Battery optimiser | Charge and discharge schedule for one delivery day | MILP in PuLP with CBC, wear cost, two-cycle cap |
 | Backtester | Walk-forward over two years, profit against perfect foresight, one frozen hold-out | Daily re-solve, Shapley attribution, block bootstrap |
 | Model health | Failure experiments measured in euros: a price regime shift, drift, a missing weather feed and the 12:00 deadline; an incident log | Walk-forward reruns, rolling alerts with thresholds fixed on validation, a fallback chain |
-| Live pipeline | A daily run that forecasts tomorrow, commits a schedule before the 12:00 gate and settles it the next day | Airflow DAG, readiness sensor with a deadline, fallback chain with a time limit on every step, MLflow model registry refit every 28 days |
+| Live pipeline | A daily run that forecasts tomorrow, commits a schedule before the 12:00 gate and settles it the next day | Airflow DAG, readiness sensor with a deadline, fallback chain with a time limit on every step, MLflow model registry refit every 28 days, a daily drift check |
 | Dashboard | Forecast fan, calibration, error by hour, the day's schedule, cumulative profit for any battery from 0.5 to 5 MW and 1 to 4 hours, and a Model health tab | React and FastAPI over exported backtest results; one day's schedule solved on request |
 | Desk briefing | Three to five sentences about the tab you are on, and three follow-up questions | A deterministic writer over that page's own numbers; a language model can be switched on, with every figure it writes checked against them before it is shown |
 
@@ -94,7 +94,7 @@ I broke the pipeline on purpose and measured what it cost.
 The same code that ran the backtest runs as a daily job. At 10:30 it refreshes the
 feeds, waits for tomorrow's load forecast and weather, forecasts at 11:40 and commits
 a schedule before the 12:00 gate. The next day it settles what it committed, once the
-auction has published the prices.
+auction has published the prices, and runs the drift monitor on the settled record.
 
 ```mermaid
 flowchart LR
@@ -106,7 +106,9 @@ flowchart LR
   E -->|timed out| G[forecast, degraded]
   F --> H[export dashboard]
   G --> H
-  H --> I[settle yesterday]
+  H --> L[check deadline]
+  L --> I[settle yesterday]
+  I --> K[check drift]
 ```
 
 - **A late feed does not stop the bid.** The chain steps down from the production
@@ -126,6 +128,11 @@ flowchart LR
   no limit of their own, and only the forecast task's 15-minute timeout covers them.
 - **A live day cannot be settled when it is traded,** so the run commits a plan and a
   separate step values it once prices publish.
+- **The drift monitor runs on the live record,** with the thresholds fixed on
+  validation: rolling 28-day 90% coverage below 74% or pinball loss above 1.5 times its
+  validation median. It scores only settled days the production model forecast, needs
+  28 of them before it can alert, and raises a drift incident for retraining review; it
+  does not refit early.
 - **The hold-out stays frozen:** the pipeline refuses any delivery day before
   `live_from`, the day after the hold-out was last scored.
 
@@ -158,7 +165,7 @@ with `make airflow`.
 - **Wear is a flat €8 per MWh discharged** with a two-cycle cap, not a cell-ageing model, and each day starts and ends half full.
 - **Outages sit outside the headline numbers (T4).** Settled at the German imbalance price, a random two-hour outage costs €44 on average, the worst window of a day €277.
 - **The hold-out is 105 summer days (T6)** and public data has gaps. Failure rates in the deadline simulation are assumptions, not measured outages.
-- **The live model refits on a fixed schedule only.** The drift monitor is measured on validation and the hold-out but does not run daily yet, so a sudden jump in price level waits for the next 28-day refit.
+- **The live model refits on a fixed schedule only.** The drift monitor runs daily on the live record but only flags a retraining review, and it needs 28 production-model days before it can alert, so a sudden jump in price level waits for the next 28-day refit.
 - **The desk briefing is written by a template, not a model, by default (M5).** With a model switched on, every figure it writes must appear in the payload the page was built from, and prose that fails gets one rewrite before the template answers. What the check cannot tell is whether a figure is used in the right role: of 20 gpt-4o-mini briefings shown after it, 7 still misstated what a figure meant. A reflection layer with evals could close that gap; I left it out on purpose, because the template says less but everything it says is right.
 - Not a trading recommendation.
 
@@ -188,7 +195,7 @@ src/features/            features built only from what is known at 11:40
 src/forecasting/         information set, walk-forward harness, eight models, hold-out runner
 src/trading/             battery, MILP optimiser, settlement, strategies, backtest, attribution
 src/health/              drift monitor, incident log, failure experiments (M1, M2, M3, T4, D1, D5), T1 follow-ups
-src/pipeline/            the daily live run: readiness, fallback chain, plan, model registry and refits
+src/pipeline/            the daily live run: readiness, fallback chain, plan, model registry, refits, drift check
 dags/                    the Airflow DAG, thin: every task shells into src/
 src/export/              dashboard artifacts: forecasts, P&L grid, attribution
 api/                     read-only FastAPI service behind the dashboard
@@ -218,6 +225,8 @@ make mlflow     # browse the recorded experiment runs at http://127.0.0.1:5001
 make airflow-setup # create the Airflow environment, once
 make airflow    # scheduler and UI at http://127.0.0.1:8080
 make pipeline   # one live run without Airflow: make pipeline DAY=2026-09-17
+make settle     # value a committed schedule once prices publish: make settle DAY=2026-09-17
+make drift      # drift monitor on the live record through a day: make drift DAY=2026-09-17
 make launchd-install # macOS: switch the daily DAG on, keep Airflow running from login and the Mac awake for the run
 make dashboard  # build the React app and serve it with the API at http://127.0.0.1:8000
 make test       # ruff, strict mypy, pytest

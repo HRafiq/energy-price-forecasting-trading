@@ -725,7 +725,7 @@ per line, validated by `src/health/incidents.py`:
 | `severity` | `info`, `warning` or `critical` |
 | `detail`, `action` | plain sentences with the numbers, and what was done |
 | `status` | `resolved` or `review` |
-| `source` | `observed` for events found in the saved data, or the experiment that injected or detected it: `m2_drift`, `d5_deadline` |
+| `source` | `observed` for events found in the saved data; `pipeline` for the live pipeline's own runs; `live_drift` for the live drift check; or the experiment that injected or detected it: `m2_drift`, `d5_deadline` |
 | `metrics` | numbers behind the detail |
 
 The file is rewritten whole, sorted by delivery day, type and id, so the same
@@ -773,7 +773,8 @@ settles it once the prices are published.
 | File | What it holds | Written by |
 |---|---|---|
 | `data/processed/pipeline/plans/<day>.parquet` | The committed schedule for one delivery day: charge, discharge, net power and state of charge per period, the forecast prices it was optimised against, and the metadata a later settlement needs: which chain step and model produced the forecast, when it was issued, the product length and the planned value | `src.pipeline.plan` |
-| `data/processed/forecasts/production/<day>.parquet` | The quantile forecast the plan was built from, as in earlier phases | `src.forecasting.production` |
+| `data/processed/forecasts/production/<day>.parquet` | The quantile forecast the plan was built from, as in earlier phases, plus `chain_step`, the rung of the fallback chain that produced it | `src.pipeline.daily_run` |
+| `data/processed/health/live_drift.json` | The live drift check: thresholds used, scored days, whether it is still warming up, the latest rolling values and alerts, skipped days with the reason, and the daily series | `src.pipeline.drift_check` |
 
 **Which day may run.** `evaluation.holdout_last_day` is the last day the hold-out was
 ever scored, and `evaluation.live_from` is the first day the live pipeline may
@@ -815,6 +816,17 @@ around them have no limit of their own; both forecast tasks carry a 15-minute
 SLAs and its DAG-level deadline alerts could not run in a test, so the check reads
 the run record after the export and writes a critical pipeline incident when the
 schedule was committed after the 12:00 gate.
+
+**The live drift check.** After settling, `check_drift` (`make drift DAY=...` by hand)
+runs the M2 monitor on the live record with the thresholds saved in
+`experiments/m2_drift.json`, unchanged. It scores the saved live forecasts in
+`forecasts/production/` from `live_from` on, but only days the production model
+forecast and whose prices are all published; fallback days and unpriced days are
+listed as skipped. Until 28 days are scored it reports how many it has and cannot
+alert. Each run of alert days becomes a `drift` incident with source `live_drift`, and
+the live drift incidents are rebuilt on every run. The summary, with the daily and
+rolling values, goes to `health/live_drift.json`. The dashboard export runs before the
+check, so a new alert reaches the dashboard's incident log with the next day's export.
 
 ---
 
