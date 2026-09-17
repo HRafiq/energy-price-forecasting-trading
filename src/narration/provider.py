@@ -4,7 +4,8 @@ The desk briefing is three to five sentences of operator language about one tab.
 A language model writes it, but the numbers are not its to invent: it receives the
 payload (:mod:`src.narration.payload`) and may use nothing else, and every figure
 it writes is checked afterwards (:mod:`src.narration.grounding`). A briefing whose
-numbers fail that check is never shown.
+numbers fail that check is never shown. The model gets one second draft, told which
+figures failed (:class:`Retry`); if that fails too, the template answers.
 
 Three providers implement the same interface:
 
@@ -35,11 +36,13 @@ from src.config import REPO_ROOT
 __all__ = [
     "BRIEFING_RULES",
     "FOLLOW_UPS",
+    "MAX_ATTEMPTS",
     "AnthropicProvider",
     "Briefing",
     "NarrationError",
     "OpenAIProvider",
     "Provider",
+    "Retry",
     "TemplateProvider",
     "build_provider",
     "env_value",
@@ -58,9 +61,15 @@ DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
 MODEL_ENV = "NARRATION_MODEL"
 MAX_TOKENS = 320
-#: One retry at most: a briefing that has not arrived in about a minute is replaced
-#: by the template rather than holding the page.
+#: One network retry per call, 15 seconds each, and two drafts at most: a briefing
+#: that has not arrived in about a minute is replaced by the template rather than
+#: holding the page. A briefing normally arrives in 2 to 5 seconds.
 MAX_RETRIES = 1
+TIMEOUT_S = 15.0
+#: Attempts the model gets at one briefing: the first draft, and one rewrite told
+#: which figures failed the check. A third would rarely fix what two did not, and
+#: would make the operator wait for a template anyway.
+MAX_ATTEMPTS = 2
 #: The canned questions under each briefing.
 FOLLOW_UPS = {
     "why_this_dispatch": "Why this dispatch?",
@@ -73,13 +82,24 @@ for the operator of a 1 MW battery in the German day-ahead market.
 
 Rules, in order of importance:
 1. Every number you write must appear in the payload. Do not add, derive,
-   average, convert or estimate any figure. If a number is not in the payload,
-   do not use it.
-2. Three to five sentences. No lists, no headings, no markdown.
-3. Plain operator language: what happened, and what it cost or earned.
-4. Say what the numbers show, not what should be done about it.
-5. If the payload says prices are not published yet, say the day is not settled
-   rather than guessing what it earned."""
+   average, convert or estimate any figure: no differences, sums, ratios or
+   percentages of your own. If a number is not in the payload, do not use it.
+2. Write every figure the way the payload holds it:
+   - a date exactly as the payload writes it, such as 2026-09-14, never with a
+     month name;
+   - a clock time as HH:MM, such as 19:45;
+   - a negative figure with its minus sign, such as -3.39, never as "a negative
+     3.39" or "a loss of 3.39";
+   - a share such as 0.8957 may be written as 89.57%, and any figure may be
+     rounded to two decimals.
+3. Name an hour block such as "18-20" in words, such as "the evening hours",
+   never by its digits.
+4. Three to five sentences. No lists, no headings, no markdown.
+5. Plain operator language: what happened, and what it cost or earned.
+6. Say what the numbers show, not what should be done about it.
+7. Only when the payload holds "prices_published": false, say the day is not
+   settled rather than guessing what it earned. Otherwise do not mention
+   settlement or published prices."""
 
 
 class NarrationError(RuntimeError):
@@ -98,13 +118,29 @@ class Briefing:
         return {"text": self.text, "provider": self.provider, "model": self.model}
 
 
+@dataclass(frozen=True)
+class Retry:
+    """A draft the grounding check refused, and the figures it refused."""
+
+    draft: str
+    rejected: tuple[str, ...]
+
+
 class Provider(Protocol):
     """Anything that can write a briefing from a payload."""
 
     name: str
 
-    def write(self, payload: dict[str, Any], question: str | None = None) -> Briefing:
-        """Three to five sentences about ``payload``, answering ``question``."""
+    def write(
+        self,
+        payload: dict[str, Any],
+        question: str | None = None,
+        retry: Retry | None = None,
+    ) -> Briefing:
+        """Three to five sentences about ``payload``, answering ``question``.
+
+        With ``retry``, the same briefing again, without the refused figures.
+        """
 
 
 def env_value(name: str, env_path: Path | None = None) -> str | None:
@@ -134,6 +170,32 @@ def load_api_key(env_path: Path | None = None, name: str = API_KEY_ENV) -> str |
 def _user_message(payload: dict[str, Any], question: str | None) -> str:
     ask = question or "Write the briefing for this tab."
     return f"{ask}\n\nPayload:\n{json.dumps(payload, indent=2)}"
+
+
+def _retry_message(retry: Retry) -> str:
+    figures = ", ".join(f'"{figure}"' for figure in retry.rejected)
+    return (
+        f"These figures in your briefing are not in the payload: {figures}. Write "
+        "the briefing again without them. Quote dates and times exactly as the "
+        "payload writes them, keep minus signs, name hour blocks in words, and "
+        "state no figure you worked out yourself."
+    )
+
+
+def _conversation(
+    payload: dict[str, Any], question: str | None, retry: Retry | None
+) -> list[Any]:
+    """The user turns, with the refused draft and why it was refused on a retry.
+
+    Both SDKs take this shape of turn; each types it as its own message class.
+    """
+    turns: list[Any] = [{"role": "user", "content": _user_message(payload, question)}]
+    if retry is not None:
+        turns += [
+            {"role": "assistant", "content": retry.draft},
+            {"role": "user", "content": _retry_message(retry)},
+        ]
+    return turns
 
 
 def _call_failed(provider: str, exc: Exception) -> str:
@@ -167,7 +229,12 @@ class TemplateProvider:
 
     name: str = "template"
 
-    def write(self, payload: dict[str, Any], question: str | None = None) -> Briefing:
+    def write(
+        self,
+        payload: dict[str, Any],
+        question: str | None = None,
+        retry: Retry | None = None,
+    ) -> Briefing:
         tab = payload.get("tab", "overview")
         writer = {
             "overview": self._overview,
@@ -294,9 +361,14 @@ class OpenAIProvider:
     api_key: str
     model: str = DEFAULT_MODEL
     name: str = "openai"
-    timeout_s: float = 30.0
+    timeout_s: float = TIMEOUT_S
 
-    def write(self, payload: dict[str, Any], question: str | None = None) -> Briefing:
+    def write(
+        self,
+        payload: dict[str, Any],
+        question: str | None = None,
+        retry: Retry | None = None,
+    ) -> Briefing:
         try:
             from openai import OpenAI
         except ModuleNotFoundError as exc:  # pragma: no cover - depends on the install
@@ -312,7 +384,7 @@ class OpenAIProvider:
                 model=self.model,
                 messages=[
                     {"role": "system", "content": BRIEFING_RULES},
-                    {"role": "user", "content": _user_message(payload, question)},
+                    *_conversation(payload, question, retry),
                 ],
                 temperature=0.2,
                 max_tokens=MAX_TOKENS,
@@ -333,9 +405,14 @@ class AnthropicProvider:
     api_key: str
     model: str = DEFAULT_ANTHROPIC_MODEL
     name: str = "anthropic"
-    timeout_s: float = 30.0
+    timeout_s: float = TIMEOUT_S
 
-    def write(self, payload: dict[str, Any], question: str | None = None) -> Briefing:
+    def write(
+        self,
+        payload: dict[str, Any],
+        question: str | None = None,
+        retry: Retry | None = None,
+    ) -> Briefing:
         try:
             from anthropic import Anthropic
         except ModuleNotFoundError as exc:  # pragma: no cover - depends on the install
@@ -351,9 +428,7 @@ class AnthropicProvider:
                 model=self.model,
                 max_tokens=MAX_TOKENS,
                 system=BRIEFING_RULES,
-                messages=[
-                    {"role": "user", "content": _user_message(payload, question)}
-                ],
+                messages=_conversation(payload, question, retry),
             )
         except Exception as exc:
             raise NarrationError(_call_failed(self.name, exc)) from exc

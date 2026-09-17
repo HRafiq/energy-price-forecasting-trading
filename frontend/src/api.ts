@@ -533,11 +533,13 @@ export interface NarrateResponse {
   /** Every figure in `text` was found in the payload the briefing was given. */
   grounded: boolean;
   unsupported: string[];
-  /** A model wrote prose with a figure that was not in the payload, so it was dropped. */
+  /** The deterministic writer answered in place of the model. */
   fell_back: boolean;
-  /** The figures a model wrote that are not in the payload; empty if it never answered. */
+  /** Drafts asked of the provider: 2 when the first was refused and rewritten. */
+  attempts: number;
+  /** Figures a model wrote that are not in the payload, over every refused draft. */
   rejected: string[];
-  /** Why the deterministic writer answered, or null when the first attempt stood. */
+  /** Why the deterministic writer answered, or null when a model draft stood. */
   fallback_reason: string | null;
   follow_ups: Record<string, string>;
 }

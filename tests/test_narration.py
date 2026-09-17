@@ -545,3 +545,52 @@ def test_the_anthropic_reply_is_read_from_its_text_blocks(
     assert briefing.text == "First sentence. Second sentence."
     assert briefing.provider == "anthropic"
     assert briefing.model == provider_mod.DEFAULT_ANTHROPIC_MODEL
+
+
+class _Recording(_Refusing):
+    """A client that answers and keeps what it was sent."""
+
+    sent: ClassVar[list[dict[str, Any]]] = []
+
+    def create(self, **kwargs: object) -> object:
+        _Recording.sent.append(kwargs)
+        message = type("Message", (), {"content": "Rewritten."})()
+        choice = type("Choice", (), {"message": message})()
+        block = type("Block", (), {"text": "Rewritten."})()
+        return type("Reply", (), {"choices": [choice], "content": [block]})()
+
+
+@pytest.mark.parametrize(
+    ("module", "client", "make", "leading"),
+    [
+        ("openai", "OpenAI", lambda: provider_mod.OpenAIProvider(api_key="k"), 1),
+        (
+            "anthropic",
+            "Anthropic",
+            lambda: provider_mod.AnthropicProvider(api_key="k"),
+            0,
+        ),
+    ],
+)
+def test_a_retry_shows_the_model_its_draft_and_the_figures_that_failed(
+    monkeypatch: pytest.MonkeyPatch, module: str, client: str, make: Any, leading: int
+) -> None:
+    import importlib
+
+    _Recording.sent = []
+    monkeypatch.setattr(importlib.import_module(module), client, _Recording)
+    retry = provider_mod.Retry("On September 14, 2026 it earned.", ("14", "2026"))
+
+    make().write(OVERVIEW)
+    make().write(OVERVIEW, retry=retry)
+
+    first, second = (
+        cast(list[dict[str, str]], sent["messages"]) for sent in _Recording.sent
+    )
+    # OpenAI carries the rules as a leading system turn; Anthropic as `system`.
+    assert [turn["role"] for turn in first[leading:]] == ["user"]
+    assert second[: leading + 1] == first
+    assert second[leading + 1] == {"role": "assistant", "content": retry.draft}
+    assert second[leading + 2]["role"] == "user"
+    assert '"14", "2026"' in second[leading + 2]["content"]
+    assert "without them" in second[leading + 2]["content"]

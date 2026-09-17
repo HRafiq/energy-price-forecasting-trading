@@ -596,16 +596,38 @@ assembled from the same API functions the page itself calls, and is told that ev
 number it writes must appear there. The prose that comes back is then read for
 numbers and each one is looked up in that payload, allowing for thousands separators,
 rounding, and a share written as a percentage. A briefing carrying a figure that is
-not there is discarded: the API answers with a deterministic writer over the same
-payload, names the rejected figures in `rejected`, and sets `fell_back`. The same
-happens when the model cannot be reached, so a briefing always arrives and nothing
-that fails the check is returned.
+not there is refused and sent back once, with the figures that failed; a rewrite
+that passes is shown, and one that fails again is discarded. The API then answers
+with a deterministic writer over the same payload, names the rejected figures in
+`rejected`, and sets `fell_back`. The same happens, without a rewrite, when the
+model cannot be reached, so a briefing always arrives and nothing that fails the
+check is returned.
 
 **Measured:** the four payloads are 954, 1,154, 647 and 2,783 bytes, holding
 16, 23, 11 and 28 distinct numbers. The briefings written from them state
 7, 9, 6 and 9 figures, and every one is found. A payload of that size is small
 enough to send whole and to check a sentence against, which is the reason the
 briefing is scoped to one tab and one day rather than to the run.
+
+**Measured against a real model:** each run is twenty calls to gpt-4o-mini over
+the backtest's last day: four briefings per tab and four follow-up questions, two on
+the overview and one each on the forecast and trading tabs. Under the first
+instructions the model's briefing was shown 3 times in 20. Every figure it was
+refused for was one the payload holds in another form: a date written with a month
+name, such as "September 14, 2026", which reads as the numbers 14 and 2026, or an
+hour block such as "11-14" written by its digits. An earlier run of five calls also
+dropped a minus sign and wrote a difference the model had worked out itself.
+
+The instructions now say how each of those is written, and a refused draft gets one
+rewrite. A second run found a fault the check cannot see because it carries no
+number: told to say a day is not settled "if the payload says prices are not
+published", the model said so in 6 of 20 briefings, all on tabs whose payload has no
+such flag. With the rule tied to the key itself, a third run showed the model's
+briefing 20 times in 20, with no mention of settlement: 19 first drafts passed, and
+one rewrite passed after its first draft named two blocks by their digits. To test
+the rewrite on every tab, a refused first draft was written by hand for each and the
+model was asked to repair it: three rewrites passed, and the fourth named a block by
+its digits again, so the template answered.
 
 **What the check cannot catch:** it verifies the prose against the payload, not the
 payload against the page. The capture ratio first arrived rounded to two places, so
@@ -636,8 +658,11 @@ the suite rather than the dashboard.
 **The limit worth stating plainly:** the check asks whether a figure is in the
 payload, not whether it is in the right place. The battery runs 2 hours and cycles
 1.71 times a day, and a briefing claiming it "cycled 2 times a day" passes, because 2
-is in the payload as the duration. Catching that would mean tying each sentence to
-the key it describes, which this does not attempt. What it does catch is the figure
+is in the payload as the duration. The real model does this unprompted: grounded
+briefings from gpt-4o-mini called the evening block's 1028.78 EUR share of the gap
+to perfect foresight "an earning", and a pinball loss of 9.49 EUR/MWh "earnings".
+Catching that would mean tying each sentence to the key it describes, which this
+does not attempt. What it does catch is the figure
 that exists nowhere in the data, which is the one that cannot be argued with.
 
 **Without a key:** `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are optional. With
