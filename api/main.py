@@ -293,10 +293,11 @@ def _plain_question(question: str | None) -> str | None:
 def narrate(request: NarrateRequest, root: Root) -> dict[str, Any]:
     """A briefing for one tab, carrying only numbers the payload already holds.
 
-    The model writes it and the grounding check judges it: prose that states a
-    figure the payload does not contain is thrown away and the deterministic
-    writer answers instead, with the rejected figures in the response. What is
-    returned is always grounded, so the dashboard can show it unread.
+    The deterministic writer answers unless a model is switched on. A model's
+    draft is judged by the grounding check: one that states a figure the payload
+    does not contain is sent back once, and if the rewrite fails too the
+    deterministic writer answers, with the rejected figures in the response. What
+    is returned is always grounded, so the dashboard can show it unread.
     """
     loaded = _run(root, request.run)
     health = _health(root, request.run) if request.tab == "model_health" else None

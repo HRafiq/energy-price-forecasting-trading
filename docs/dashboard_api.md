@@ -342,8 +342,10 @@ run's last day is used:
                 "explain_the_miss": "Explain the miss"}}
 ```
 
-The briefing may state only numbers the deterministic core already produced. The
-model is given a payload built from these same endpoints and nothing else, and every
+The briefing may state only numbers the deterministic core already produced. By
+default the deterministic writer produces it. When a model is switched on (see
+`provider` below), the model is given a payload built from these same endpoints and
+nothing else, and every
 figure it writes is looked up in that payload afterwards. A draft carrying a figure
 that is not there is refused, and the model writes once more, shown its draft and
 told which figures failed. If the rewrite passes it is returned, with `attempts`
@@ -353,7 +355,7 @@ is no third draft: the deterministic writer answers, `fell_back` is `true`,
 briefing stated figures the page does not show. When the model cannot be reached,
 nothing is retried, `fallback_reason` carries the error, and the endpoint still
 returns a briefing. `attempts` counts the drafts asked for, so it is 1 when the
-first one stood or no key is set.
+first one stood or the template is the writer.
 
 Rounding is the only latitude the check gives. A payload holding 0.8957 supports
 "89.57%", "89.6%" and "90%", but not "89%"; 964.46 supports "964" but not "965"; and
@@ -374,9 +376,10 @@ matters here.
 used, in digits and in words alike: a figure typed into the question does not appear
 in the briefing as though the data held it.
 
-`provider` says who wrote the returned text: `openai` or `anthropic` when that
-provider's key is set, in the environment or in the gitignored `.env` (see
-`.env.example`), and `template` otherwise or after a fallback. `grounded` describes
+`provider` says who wrote the returned text: `template` by default and after a
+fallback, and `openai` or `anthropic` when `NARRATION_PROVIDER` names that provider
+and its key is set, in the environment or in the gitignored `.env` (see
+`.env.example`). A key alone leaves the template writing. `grounded` describes
 the text actually returned. It is `true` in every response the endpoint
 produces, because prose that fails the check is replaced rather than returned; read
 `fell_back` and `fallback_reason` to see whether that happened.

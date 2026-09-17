@@ -1,23 +1,30 @@
 """Who writes the briefing, and the rule it is held to.
 
 The desk briefing is three to five sentences of operator language about one tab.
-A language model writes it, but the numbers are not its to invent: it receives the
-payload (:mod:`src.narration.payload`) and may use nothing else, and every figure
-it writes is checked afterwards (:mod:`src.narration.grounding`). A briefing whose
-numbers fail that check is never shown. The model gets one second draft, told which
-figures failed (:class:`Retry`); if that fails too, the template answers.
+By default a deterministic writer produces it from the page's own numbers. A
+language model can be switched on to write it instead, but the numbers are not its
+to invent: it receives the payload (:mod:`src.narration.payload`) and may use nothing
+else, and every figure it writes is checked afterwards
+(:mod:`src.narration.grounding`). A briefing whose numbers fail that check is never
+shown. The model gets one second draft, told which figures failed (:class:`Retry`);
+if that fails too, the template answers.
+
+The model is off by default because the check proves a figure is on the page, not
+that a sentence gives it the right meaning, and measured against the real model that
+is the gap that shows (production notes, M5: a grounded briefing that misreads the
+page).
 
 Three providers implement the same interface:
 
+* :class:`TemplateProvider` writes the brief from the payload with fixed sentences.
+  It is grounded by construction, answers unless a model is switched on, is what
+  the tests use, and is the fallback when a call fails or comes back ungrounded.
 * :class:`OpenAIProvider` calls the OpenAI API with ``OPENAI_API_KEY``, and
-  :class:`AnthropicProvider` the Anthropic API with ``ANTHROPIC_API_KEY``, both
-  read from the environment or the gitignored ``.env`` (see ``.env.example``).
-  Without a key neither is selected, so the repository runs and its tests pass
-  with no key and no network. A failed call, a wrong key or a rate limit, becomes
-  a ``NarrationError``, so the caller falls back rather than failing.
-* :class:`TemplateProvider` writes the same brief from the payload with fixed
-  sentences. It is what answers when no key is set, what the tests use, and the
-  fallback when a call fails or comes back ungrounded.
+  :class:`AnthropicProvider` the Anthropic API with ``ANTHROPIC_API_KEY``. Either
+  answers only when ``NARRATION_PROVIDER`` names it and its key is set, both read
+  from the environment or the gitignored ``.env`` (see ``.env.example``). A failed
+  call, a wrong key or a rate limit, becomes a ``NarrationError``, so the caller
+  falls back rather than failing.
 
 ``build_provider`` picks between them, so nothing above this module knows which
 one answered; the response says so instead.
@@ -26,12 +33,15 @@ one answered; the response says so instead.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from src.config import REPO_ROOT
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BRIEFING_RULES",
@@ -53,7 +63,7 @@ __all__ = [
 #: .env.example). Nothing in the repository ever stores a key.
 API_KEY_ENV = "OPENAI_API_KEY"
 ANTHROPIC_KEY_ENV = "ANTHROPIC_API_KEY"
-#: Which provider answers when both keys are set: "openai" or "anthropic".
+#: Switches a model on: "openai" or "anthropic". A key alone does not.
 PROVIDER_ENV = "NARRATION_PROVIDER"
 #: A briefing is a few sentences over a payload of a few hundred numbers, so both
 #: defaults are the providers' small, cheap models. Override with NARRATION_MODEL.
@@ -224,7 +234,7 @@ class TemplateProvider:
     """Writes the briefing from the payload with fixed sentences.
 
     It states only what it reads, so it is grounded by construction. It answers
-    when no key is set, and stands in for the model in every test.
+    unless a model is switched on, and stands in for the model in every test.
     """
 
     name: str = "template"
@@ -374,7 +384,7 @@ class OpenAIProvider:
         except ModuleNotFoundError as exc:  # pragma: no cover - depends on the install
             raise NarrationError(
                 "the openai package is not installed; run `uv sync` or leave "
-                "OPENAI_API_KEY unset to use the template"
+                "NARRATION_PROVIDER unset to use the template"
             ) from exc
         try:
             client = OpenAI(
@@ -418,7 +428,7 @@ class AnthropicProvider:
         except ModuleNotFoundError as exc:  # pragma: no cover - depends on the install
             raise NarrationError(
                 "the anthropic package is not installed; run `uv sync` or leave "
-                "ANTHROPIC_API_KEY unset to use the template"
+                "NARRATION_PROVIDER unset to use the template"
             ) from exc
         try:
             client = Anthropic(
@@ -439,29 +449,32 @@ class AnthropicProvider:
 
 
 def build_provider(env_path: Path | None = None) -> Provider:
-    """The model whose key is set, or the template writer when none is.
+    """The deterministic writer, unless a model is switched on.
 
-    Each setting is read from the environment first, then from .env.
-    ``NARRATION_PROVIDER`` is honoured when its key is set; otherwise whichever key
-    is set answers, OpenAI first. ``NARRATION_MODEL`` overrides the default model,
-    but not for a provider standing in for the one ``NARRATION_PROVIDER`` named: a
-    model name belongs to one provider, and the other would refuse it on every call.
+    A model writes the briefing only when ``NARRATION_PROVIDER`` names it, "openai"
+    or "anthropic", and that provider's key is set. A key on its own does not switch
+    a model on, and neither does a named provider whose key is missing or a name
+    that is neither. ``NARRATION_MODEL`` overrides the named provider's default
+    model. Each setting is read from the environment first, then from .env.
     """
-    openai_key = env_value(API_KEY_ENV, env_path)
-    anthropic_key = env_value(ANTHROPIC_KEY_ENV, env_path)
     choice = (env_value(PROVIDER_ENV, env_path) or "").lower()
     model = env_value(MODEL_ENV, env_path)
-
-    def chosen_model(name: str, default: str) -> str:
-        return model if model and choice in ("", name) else default
-
-    if anthropic_key and (choice == "anthropic" or not openai_key):
-        return AnthropicProvider(
-            api_key=anthropic_key,
-            model=chosen_model("anthropic", DEFAULT_ANTHROPIC_MODEL),
+    if choice and choice not in ("openai", "anthropic", "template"):
+        logger.warning(
+            "%s=%r is not openai or anthropic; the template writes",
+            PROVIDER_ENV,
+            choice,
         )
-    if openai_key:
-        return OpenAIProvider(
-            api_key=openai_key, model=chosen_model("openai", DEFAULT_MODEL)
+    if choice == "openai" and (openai_key := env_value(API_KEY_ENV, env_path)):
+        return OpenAIProvider(api_key=openai_key, model=model or DEFAULT_MODEL)
+    if choice == "anthropic" and (
+        anthropic_key := env_value(ANTHROPIC_KEY_ENV, env_path)
+    ):
+        return AnthropicProvider(
+            api_key=anthropic_key, model=model or DEFAULT_ANTHROPIC_MODEL
+        )
+    if choice in ("openai", "anthropic"):
+        logger.warning(
+            "%s=%s but its key is not set; the template writes", PROVIDER_ENV, choice
         )
     return TemplateProvider()
