@@ -399,8 +399,8 @@ catch, with an alert when rolling 90% coverage falls below its threshold.
 
 ---
 
-Phase 6 adds M2, M1, D1 and D5 below; Phase 8 adds M5, and the live runs add a
-second D1 entry, on the day being forecast.
+Phase 6 adds M2, M1, D1 and D5 below; Phase 8 adds M5; the live runs add a second
+D1 entry, on the day being forecast; and a follow-up to M1 tests weekly refits.
 
 ## M2 · Drift monitoring (Phase 6: measured)
 
@@ -640,5 +640,46 @@ re-forecast a day already traded and rewritten its record as late. It had happen
 once by hand, on 16 September, without changing the settled figure. A bid is final at
 the gate, so the daily run now refuses to replace a committed schedule unless told to
 with `--replace`.
+
+**In my words:** _to write_
+
+---
+
+## M1 · Weekly against 28-day refits (validation: measured)
+
+**Question:** the regime-shift experiment showed that refitting matters, but it only
+compared the 28-day production cadence against slower ones. Is faster worth it?
+
+**Measured:** the production model walked forward over the 793 days of the Phase 2
+comparison run, refitted every 28 days (29 fits) and every 7 days (114 fits), scored on
+730 validation days and traded on the same 730. The 28-day arm reproduced the saved
+Phase 2 forecasts exactly, so the arms differ only in cadence. On 182 of the 730 days
+both arms were running the same fit, in the week after a shared refit, and forecast
+identically, which dilutes every difference below.
+
+Weekly refitting forecast better: mean pinball 5.00 against 5.11, 2.1% lower, a paired
+daily difference of -0.108 €/MWh with a 95% interval of -0.196 to -0.018 (moving-block
+bootstrap over 7-day blocks). The verdict survives 28-day blocks, which match the
+control's refit cycle, though only just: -0.210 to -0.001. The gain was not confined to
+quiet hours: pinball fell 2.5% between 17:00 and 21:00 and 2.0% in the other hours. 90%
+coverage rose from 85.6% to 86.5%, a borderline gain whose interval crosses zero with
+28-day blocks.
+
+It brought no measurable gain in profit. Median dispatch made €149,825 against
+€149,498, €327 more over two years and 0.2 capture points, but the paired daily
+difference of +€0.45 has an interval from -€0.70 to +€2.03, which over 730 days allows
+anything from about €510 less to €1,480 more. (docs/results/m1_refit_cadence.md)
+
+**Reading:** a forecast measurably better on pinball, in the evening as much as
+anywhere, did not earn measurably more. That is the decision-value finding again:
+battery profit turns on the timing and shape of the price curve, which pinball averages
+over, and a difference this small cannot be told apart from noise in two years. Compute
+is not the obstacle, since the weekly arm's 793 days ran in 16 minutes on this machine.
+The cost would be operational: in production a refit means training, checking and
+registering a model version every week instead of every four.
+
+**Not tested:** a regime shift. Faster refits should matter most when prices move
+quickly, as in 2021 to 2023, and this run covers only the calmer validation window. The
+hold-out cannot be used to decide it.
 
 **In my words:** _to write_
