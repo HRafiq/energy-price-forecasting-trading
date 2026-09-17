@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +10,7 @@ import pytest
 
 from src.config import DERIVED_COLUMNS, PRICE_SERIES, Settings
 from src.ingest.build_dataset import PRODUCT_COLUMN, build_dataset, publish
-from src.ingest.quality import GranularityError, QualityReport
+from src.ingest.quality import GranularityError, QualityReport, build_quality_report
 from src.ingest.smard import SmardClient
 from src.timegrid import HOUR
 from tests.fakes import FakeSmard, hourly_chunks
@@ -62,6 +62,78 @@ def test_dataset_is_quarter_hourly_utc_and_trimmed_to_last_price(
     assert len(frame) == PRICE_PUBLISHED
     assert frame[PRICE_SERIES].notna().all()
     assert set(frame.columns) == set(settings.smard.series) | set(DERIVED_COLUMNS)
+
+
+def test_a_live_build_keeps_the_delivery_day_past_the_last_price(
+    settings: Settings, tmp_path: Path
+) -> None:
+    # Prices cover 172 of the 192 quarter-hours, but every other series covers both
+    # days, as the load forecast does on the morning before the auction.
+    second_day = settings.data.start + timedelta(days=1)
+    fake = _market(settings)
+
+    frame = build_dataset(
+        settings, SmardClient(fake.config, tmp_path, fake), through=second_day
+    )
+
+    index = pd.DatetimeIndex(frame.index)
+    assert len(frame) == PERIODS
+    assert (index[1:] - index[:-1] == QUARTER).all()
+    assert frame[PRICE_SERIES].iloc[:PRICE_PUBLISHED].notna().all()
+    assert frame[PRICE_SERIES].iloc[PRICE_PUBLISHED:].isna().all()
+    assert frame["load_forecast_mw"].iloc[PRICE_PUBLISHED:].notna().all()
+    # The added rows go through the same MWh to average MW conversion as the rest.
+    np.testing.assert_allclose(
+        frame["load_forecast_mw"].iloc[PRICE_PUBLISHED:].to_numpy(),
+        [
+            _raw_value(settings, "load_forecast_mw", i) * (HOUR / QUARTER)
+            for i in range(PRICE_PUBLISHED, PERIODS)
+        ],
+    )
+    # The report is built as main() builds it before publishing. The added rows must
+    # keep the grid whole; the fixture's prices vary inside the hour on purpose, so
+    # the hourly-product check fails for the default build too and is not asserted.
+    switch = settings.market.local_midnight_utc(
+        settings.market.quarter_hour_products_from
+    )
+    report = build_quality_report(
+        frame, settings.market.timezone, QUARTER, quarter_hour_products_from=switch
+    )
+    assert report.missing_timestamps == 0 and report.duplicate_timestamps == 0
+    assert report.is_monotonic and not report.day_length_issues
+
+
+def test_a_live_build_keeps_a_whole_clock_change_day(
+    settings: Settings, tmp_path: Path
+) -> None:
+    # 28 October 2018 has 100 quarter-hours. Two days from the 27th make 196, with
+    # prices for the first 172, so the live day must run to its 100th quarter-hour.
+    shifted = settings.model_copy(
+        update={"data": settings.data.model_copy(update={"start": date(2018, 10, 27)})}
+    )
+    fake = _market(shifted, periods=196)
+
+    frame = build_dataset(
+        shifted, SmardClient(fake.config, tmp_path, fake), through=date(2018, 10, 28)
+    )
+
+    index = pd.DatetimeIndex(frame.index)
+    assert len(frame) == 196
+    assert index[-1] == shifted.market.local_midnight_utc(date(2018, 10, 29)) - QUARTER
+    assert (index[1:] - index[:-1] == QUARTER).all()
+    assert frame[PRICE_SERIES].iloc[PRICE_PUBLISHED:].isna().all()
+
+
+def test_a_live_build_for_a_day_already_priced_changes_nothing(
+    settings: Settings, tmp_path: Path
+) -> None:
+    fake = _market(settings)
+
+    frame = build_dataset(
+        settings, SmardClient(fake.config, tmp_path, fake), through=settings.data.start
+    )
+
+    assert len(frame) == PRICE_PUBLISHED
 
 
 def test_volumes_become_average_mw_and_prices_stay_in_eur_per_mwh(

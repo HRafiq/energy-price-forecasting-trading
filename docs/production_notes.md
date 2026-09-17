@@ -399,7 +399,8 @@ catch, with an alert when rolling 90% coverage falls below its threshold.
 
 ---
 
-Phase 6 adds M2, M1, D1 and D5 below; later phases add M5 and S1.
+Phase 6 adds M2, M1, D1 and D5 below; Phase 8 adds M5, and the live runs add a
+second D1 entry, on the day being forecast.
 
 ## M2 · Drift monitoring (Phase 6: measured)
 
@@ -524,12 +525,15 @@ keeps the order it was frozen with, so its numbers stand as reported.
 **Built in Phase 7:** the chain is no longer only a simulation. The daily pipeline
 runs it for real: a readiness check reports each feed separately, the chain steps
 down when one is late, and every fallback writes an incident with the step used and
-the time the forecast went out. A first live run for 17 September 2026 found the load
-forecast and weather unpublished, skipped the production and no-weather rungs, and
-committed a seasonal naive schedule worth €783. A run for 16 September, whose feeds
-were complete, used the production model served from the MLflow registry and
-committed €289. Airflow 3 removed task-level SLAs, and its DAG-level deadline alerts crashed the
-end-to-end test run, so the deadline is a task of its own: after the export, it
+the time the forecast went out. A first live run for 17 September 2026 reported the
+load forecast and weather unpublished, skipped the production and no-weather rungs,
+and committed a seasonal naive schedule worth €783. The run for 18 September later hit
+the same 0 of 96 while SMARD held the full load forecast, so the pipeline rather than
+the feeds was at fault, as the D1 entry on the day being forecast explains. A run for
+16 September, whose feeds were complete, used the production model served from the
+MLflow registry and committed €289. Airflow 3 removed task-level SLAs, and its
+DAG-level deadline alerts crashed the end-to-end test run, so the deadline is a task
+of its own: after the export, it
 compares the time the forecast went out with the 12:00 gate from the run record
 and writes a critical pipeline incident when the schedule was committed late.
 
@@ -598,3 +602,43 @@ that exists nowhere in the data, which is the one that cannot be argued with.
 **Without a key:** `OPENAI_API_KEY` is optional. With no key the deterministic writer
 answers every request, which is what the test suite runs against, so the grounding
 path and the fallback are exercised on every run with no network and no spend.
+
+**In my words:** _to write_
+
+---
+
+## D1 · The day being forecast, trimmed away (live: found and fixed)
+
+**What broke:** the dataset build trims every row after the last published price.
+That is right for a backtest, where a row without a price has nothing to score, and
+wrong for a live run. Before the 12:00 auction the last published price is 23:45 on
+the issue day, so the trim removed every row of the day being forecast, including the
+load forecast SMARD publishes for it that morning. The inputs are built on the
+dataset's rows, so that day's weather went too, and the readiness check counted 0 of
+96 periods for both.
+
+**How it showed:** the runs for 17 and 18 September both reported the load forecast
+and weather missing and fell back to seasonal naive. The second was on time, issued
+at 11:34 Berlin, 26 minutes before the gate. Checked directly at 11:33 Berlin that day,
+SMARD already held all 96 quarter-hours of the next day's load forecast, so the feed
+was not late: the pipeline had thrown it away. A backtest cannot find this, because
+every day it replays already has its prices.
+
+**Fix:** a live build asks for the delivery day explicitly (`build_dataset --through`,
+passed by the daily pipeline and the Airflow DAG). That day's rows are kept on a
+complete quarter-hour grid with the price left blank, along with everything SMARD has
+already published for them. The default build is unchanged, so no backtest reads
+different data, and the availability rules still hide a target day's price from the
+models. Tests pin both behaviours.
+
+**Found in review of the fix:** two more ways a live day could go wrong. The readiness
+sensor only reread the inputs built at 10:30, so a load forecast published minutes
+later would never be seen and the run would fall back anyway; each poke now rebuilds
+the dataset and inputs first. And nothing stopped a rerun from replacing a committed
+schedule: Airflow runs the latest slot it missed when it starts, which would have
+re-forecast a day already traded and rewritten its record as late. It had happened
+once by hand, on 16 September, without changing the settled figure. A bid is final at
+the gate, so the daily run now refuses to replace a committed schedule unless told to
+with `--replace`.
+
+**In my words:** _to write_

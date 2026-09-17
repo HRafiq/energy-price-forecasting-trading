@@ -118,11 +118,16 @@ flowchart LR
 
 **What the first runs did.** On 16 September 2026 every feed was published, the
 pipeline served the model registered as version 1 and committed a schedule worth
-€289. For 17 September the load forecast and weather had not arrived: the sensor
-gave up, the chain skipped the production and no-weather steps, and seasonal naive
-committed a schedule worth €783, with an incident naming the missing feeds and the
-time the forecast went out. Both runs were made after the gate, so both are recorded
-as late, which is what the incident log says.
+€289, which settled at €308. The run for 17 September reported the load forecast and
+weather missing and fell back to seasonal naive. Those first two runs were made by hand
+after the gate and are recorded as late. The run for 18 September went out at 11:34
+Berlin, 26 minutes before the gate, still on the fallback and planned at €324. It hit
+the same 0 of 96 while SMARD already held all 96 quarter-hours of that day's load
+forecast, which exposed the cause: the dataset build trimmed every row after the last
+published price, and on a live day that is the whole day being forecast. A live build
+now keeps the delivery day's rows with the price left blank, the readiness check
+rebuilds its inputs each time it polls, and a rerun never replaces a committed
+schedule.
 
 Run it without Airflow with `make pipeline DAY=2026-09-17`, or start the scheduler
 with `make airflow`.
@@ -199,6 +204,7 @@ make mlflow     # browse the recorded experiment runs at http://127.0.0.1:5001
 make airflow-setup # create the Airflow environment, once
 make airflow    # scheduler and UI at http://127.0.0.1:8080
 make pipeline   # one live run without Airflow: make pipeline DAY=2026-09-17
+make launchd-install # macOS: switch the daily DAG on, keep Airflow running from login and the Mac awake for the run
 make dashboard  # build the React app and serve it with the API at http://127.0.0.1:8000
 make test       # ruff, strict mypy, pytest
 ```
