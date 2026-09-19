@@ -10,6 +10,7 @@ When ``frontend/dist`` exists, the built React app is served at ``/``.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from datetime import date
@@ -250,6 +251,24 @@ def model_health_incidents(
             offset=offset,
         )
     )
+
+
+@app.get("/api/live")
+def live_record(root: Root) -> dict[str, Any]:
+    """The live pipeline's record: every delivery day, settlements, incidents.
+
+    Written by the export's ``live`` step at the dashboard root, beside the runs,
+    so it is the same whichever run the tab is showing.
+    """
+    path = root / "live.json"
+    if not path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail="live record not exported yet; run python -m src.export.artifacts "
+            "--steps live",
+        )
+    loaded: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return loaded
 
 
 @app.get("/api/model-health/ops")

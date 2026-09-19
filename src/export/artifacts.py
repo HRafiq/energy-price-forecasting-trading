@@ -657,8 +657,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--steps",
         nargs="+",
-        choices=("core", "grid", "health"),
-        default=["core", "grid", "health"],
+        choices=("core", "grid", "health", "live"),
+        default=["core", "grid", "health", "live"],
     )
     parser.add_argument(
         "--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1)
@@ -760,6 +760,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"health files written: {len(index['files'])}", flush=True)
 
     write_json({"run_id": run_id}, root / "latest.json")
+    # After latest.json, so a fault in the live record never leaves the run
+    # exported but unpublished.
+    if "live" in args.steps:
+        from src.export.live import export_live
+
+        live = export_live(settings, root)
+        print(
+            f"live record written: {live['totals']['days']} days, "
+            f"{live['totals']['settled_days']} settled",
+            flush=True,
+        )
     print(f"wrote {run_dir}")
     return 0
 

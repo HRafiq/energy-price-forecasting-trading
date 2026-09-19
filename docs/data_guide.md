@@ -780,6 +780,7 @@ settles it once the prices are published.
 |---|---|---|
 | `data/processed/pipeline/plans/<day>.parquet` | The committed schedule for one delivery day: charge, discharge, net power and state of charge per period, the forecast prices it was optimised against, and the metadata a later settlement needs: which chain step and model produced the forecast, when it was issued, the product length and the planned value | `src.pipeline.plan` |
 | `data/processed/forecasts/production/<day>.parquet` | The quantile forecast the plan was built from, as in earlier phases, plus `chain_step`, the rung of the fallback chain that produced it | `src.pipeline.daily_run` |
+| `data/processed/dashboard/live.json` | The Live tab's record: one entry per live delivery day joined from the run record, the settlement, the pipeline's incidents and the drift check, with totals; written by the export's `live` step | `src.export.live` |
 | `data/processed/health/live_drift.json` | The live drift check: thresholds used, scored days, whether it is still warming up, the latest rolling values and alerts, skipped days with the reason, and the daily series | `src.pipeline.drift_check` |
 
 **Which day may run.** `evaluation.holdout_last_day` is the last day the hold-out was

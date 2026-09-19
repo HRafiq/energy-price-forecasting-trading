@@ -9,12 +9,13 @@ import { Pill } from "./components/Pill";
 import { clock, eur, localClock, longDay, num, pct, shortDay, windowPhrase } from "./format";
 import { type AsyncState, dataOf, useApi, useDebounced } from "./hooks";
 import { ForecastTab } from "./tabs/ForecastTab";
+import { LiveTab } from "./tabs/LiveTab";
 import { ModelHealthTab } from "./tabs/ModelHealthTab";
 import { OverviewTab } from "./tabs/OverviewTab";
 import { TradingTab } from "./tabs/TradingTab";
 import { BUSY_OPACITY, C, FONT_STACK } from "./theme";
 
-const TABS = ["Overview", "Forecast", "Trading", "Model health"] as const;
+const TABS = ["Overview", "Forecast", "Trading", "Model health", "Live"] as const;
 type Tab = (typeof TABS)[number];
 
 /** URL hash for a tab, so a tab can be linked to directly: "Model health" is #model-health. */
@@ -244,9 +245,9 @@ function Dashboard({ run, grid, tab, onTab }: { run: RunInfo; grid: BatteryGrid;
       ? `prices for ${shortDay(date)} not published yet`
       : null;
 
-  // The battery and strategy controls and the P&L KPIs do not apply to Model health,
-  // so that tab hides them; the control values are kept for the other tabs.
-  const tradingControls = tab !== "Model health";
+  // The battery and strategy controls and the P&L KPIs do not apply to Model health
+  // or Live, so those tabs hide them; the control values are kept for the others.
+  const tradingControls = tab !== "Model health" && tab !== "Live";
 
   return (
     <Shell context={context} note={priceNote} runKind={runKind} holdout={isHoldout} tab={tab} onTab={onTab} runId={runId}>
@@ -287,6 +288,7 @@ function Dashboard({ run, grid, tab, onTab }: { run: RunInfo; grid: BatteryGrid;
             />
           )}
           {tab === "Model health" && <ModelHealthTab run={runId} />}
+          {tab === "Live" && <LiveTab />}
         </main>
       </div>
     </Shell>
