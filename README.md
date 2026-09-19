@@ -77,6 +77,8 @@ Better pinball loss mostly means more profit: capture rises from 77.6% for a nai
 
 So I tried the other direction: training the forecaster on the money. Keeping the production model as a fixed base, 100 extra trees are trained on a loss that rewards the battery's profit rather than the price error (SPO+, Elmachtoub and Grigas 2022), with the optimiser's linear relaxation solved 70,000 times per fit. Against a bar fixed before the run, on the 730 validation days it earned €2.93 a day more than median dispatch (95% interval +1.53 to +4.74), €2,138 over two years and 1.3 capture points, with the point's accuracy unchanged at 16.0 €/MWh: the corrections raise the morning and evening by about €1 and lower the night by about €1. The honest caveats: the ten best days carry 58% of the gain, two dark winter days a third, and 2025 alone only just clears zero. Checked afterwards: a cheap hour-of-day bias correction lost money, and other seeds gave the same result. The live pipeline still trades the median forecast.
 
+Two more experiments then went after the evening loss from the forecasting side, each with its pass mark fixed before the run, and both failed it. Nine columns saying why an evening spikes (evening load and its ramp, afternoon solar, evening wind, residual load, recent spikes) changed profit by -€0.76 a day (95% interval -1.97 to +0.52): the model could already see a tight evening coming and still guessed low, because a model trained for average accuracy hedges. A separate model of the chance that the evening reaches €200 was good (AUC 0.91; of the days it put above 70%, 84% spiked) but betting on it in the dispatch, by raising the evening valuation or by holding the battery full for 17:00, earned nothing measurable (-€0.65 and +€0.27 a day, both within noise): when a spike is visible the optimiser already holds charge for it, and the money sits in which quarter-hour the peak lands. The three together say the evening loss is not a shortage of day-level signals about whether the evening will be tight, nor a confidence problem; what is left is consistent with timing within the evening on spike days, and moving it would take a forecast of the peak's shape, quarter-hour by quarter-hour. The plans, written before each run, are in `docs/plans/`.
+
 ### Model health
 
 I broke the pipeline on purpose and measured what it cost.
@@ -158,7 +160,7 @@ with `make airflow`.
 
 - Timing beat accuracy in my backtest: an evening forecast one hour early, with a €7/MWh average error, cost as much as random noise at €16/MWh. Turned around, a forecaster trained on the battery's profit instead of its error earned 1.4% more with the same accuracy.
 - Days with a negative price were 28% of my trading days but earned 37% of the battery's profit.
-- On my hold-out, forecasts too low between 18:00 and 21:00 caused 49% of the shortfall against perfect foresight.
+- On my hold-out, forecasts too low between 18:00 and 21:00 caused 49% of the shortfall against perfect foresight. On validation, telling the model why evenings spike, and a good model of the chance of a spike, both left the evening loss where it was: the fix has to name the quarter-hour, not the evening.
 
 ## Limitations
 
@@ -193,18 +195,20 @@ flowchart LR
 ```
 config/settings.yaml     market, data sources, hold-out, battery, strategies, live refits
 src/ingest/              SMARD, Open-Meteo, fuel and ENTSO-E clients, data-quality checks
-src/features/            features built only from what is known at 11:40
+src/features/            features built only from what is known at 11:40, plus an opt-in group of evening spike drivers
 src/forecasting/         information set, walk-forward harness, eight models, hold-out runner
-src/trading/             battery, MILP optimiser and its HiGHS relaxation, settlement, strategies, backtest, attribution
+src/trading/             battery, MILP optimiser (with an optional state-of-charge floor) and its HiGHS relaxation, settlement, strategies, backtest, attribution
 src/health/              drift monitor, incident log, failure experiments (M1, M2, M3, T4, D1, D5), T1 and T2 follow-ups
+src/narration/           the desk briefing: payload, deterministic writer, optional model, grounding check
 src/pipeline/            the daily live run: readiness, fallback chain, plan, model registry, refits, drift check
 dags/                    the Airflow DAG, thin: every task shells into src/
+ops/                     launchd plists for running the DAG from login on a Mac
 src/export/              dashboard artifacts: forecasts, P&L grid, attribution
 api/                     read-only FastAPI service behind the dashboard
 frontend/                React, TypeScript and recharts dashboard
 notebooks/               builders for the evaluation notebooks and README figures
 tests/                   network-free tests, including DST days, leakage and toy MILPs
-docs/                    data guide, production notes, results, figures, dashboard mockup
+docs/                    data guide, production notes, dashboard API contract, experiment plans, results, figures, dashboard mockup
 ```
 
 ## Reproduce it
@@ -222,6 +226,7 @@ make report     # results report and evaluation notebooks
 make figures    # README figures
 make export     # dashboard artifacts, including the P&L grid for 104 battery settings
 make experiments # Phase 6 failure experiments: regime shift, missing weather, deadline, drift
+                # the follow-up experiments run one at a time: uv run python -m src.health.experiments.<name>
 make health     # drift monitor and incident log from saved forecasts
 make mlflow     # browse the recorded experiment runs at http://127.0.0.1:5001
 make airflow-setup # create the Airflow environment, once
@@ -252,7 +257,7 @@ Data: Bundesnetzagentur | SMARD.de, and weather data by Open-Meteo.com, both lic
 
 ## Background reading
 
-The reasoning and evidence behind each choice, written while building this: [the data guide](docs/data_guide.md), [the production notes](docs/production_notes.md) with a measured result for each failure mode, [the model comparison](notebooks/model_comparison.ipynb), [the backtest notebook](notebooks/backtest_report.ipynb) and [the full results](docs/results/).
+The reasoning and evidence behind each choice, written while building this: [the data guide](docs/data_guide.md), [the production notes](docs/production_notes.md) with a measured result for each failure mode, [the model comparison](notebooks/model_comparison.ipynb), [the backtest notebook](notebooks/backtest_report.ipynb), [the full results](docs/results/) and [the experiment plans](docs/plans/), each written before its run.
 
 ## About me
 
