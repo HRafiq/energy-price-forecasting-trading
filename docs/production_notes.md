@@ -446,6 +446,67 @@ and look at timing and spreads in the spread-defining hours.
 
 ---
 
+## T2 · A forecaster trained on the money (validation: tested, adopted)
+
+**Question:** the production model is trained to be accurate: rewarded for guessing
+every quarter-hour's price closely, whether or not the battery trades then. The money
+comes second, from the optimiser. T2 above and the weekly-refit note both say accuracy
+and money are not the same thing. If the forecaster is instead rewarded for the profit
+its guesses lead to, does the battery earn more?
+
+**Design, fixed before the run:** the production model's q50 stays as a fixed base, and
+100 extra LightGBM trees are boosted on the SPO+ loss (Elmachtoub and Grigas, 2022), a
+convex stand-in for the profit shortfall whose gradient at a quarter-hour is the
+difference between the battery's schedule at the real prices and its schedule at the
+guessed prices, mirrored through the real ones: where the real-price schedule sells and
+the guessed one does not, the guess is pushed up. The schedules come from the production
+optimiser's linear relaxation solved with HiGHS, which reproduces the integer optimum to
+the cent on real days except where a negative price lets the relaxation charge and
+discharge at once (the check is on the results page). The corrected point values both
+legs of dispatch; the forecast ranges are not touched. Refits follow the production
+calendar, every 28 days, and each refit's base must reproduce the saved comparison q50
+exactly. The learning rate and tree count were chosen on the 63 forecast days before the
+validation window, by highest profit there, and frozen: learning rate 5 with 100 trees
+made €136 more than median dispatch on those days, the three other gentle settings €90
+to €121, and the two aggressive ones lost, so the pick among the gentle four is within
+noise. Criterion: adopt only if the mean daily profit difference against median dispatch
+over the 730 validation days has a 95% moving-block bootstrap interval above zero. The
+hold-out was not read.
+
+**Measured:** median dispatch made €149,498, 90.10% of perfect foresight; the money
+point made €151,636, 91.39%. The difference is +€2.93 a day (+1.53 to +4.74), €2,138
+over two years, so the criterion holds. The point's accuracy did not worsen as the plan
+expected; MAE moved from 16.03 to 15.96 €/MWh: the corrections average +€1 in the
+morning and evening and -€1 overnight, sharpening the daily shape where the battery
+trades rather than moving the level. Cycles rose from 1.73 to 1.76 a day, and planned
+value moved closer to settlement, -€7.64 a day against -€13.25, not further away.
+(docs/results/t2_money_loss.md)
+
+**What the gain rests on:** the money arm wins on 365 days and loses on 269, but the ten
+best days carry 58% of the €2,138, and two dark, still winter days with evening spikes,
+6 November and 12 December 2024, carry a third. Without October to December 2024 the
+gain is +€1.62 a day (+0.77 to +2.56); in 2025 alone it is +€1.34 (+0.14 to +2.52), only
+just above zero. An independent review found no leakage: the correction trees see only
+the rows, features and past prices the base model sees. Two checks were run afterwards,
+outside the pre-registered test. A cheap rival, q50 plus its mean residual per local
+hour over the last 42 training days, lost money, -€2.43 a day (-3.80 to -1.07) with a
+worse MAE of 17.39, so the gain is not reducible to a simple hour-of-day bias
+correction. Refitting three blocks with two other seeds for the correction trees gave
+the same sign and size (results page). The two best days were still, and 12 December
+also dark: onshore wind was at its lowest for the season on both, and both peaked at
+17:00, €820 and €936.
+
+**What it changes:** a forecaster can earn more without becoming more accurate, which is
+the decision-value finding from the other side. The gain is real by the rule fixed in
+advance and small, about 1.4% of profit, and it comes from rare spike days. The live
+pipeline still trades the median: serving the money point needs the correction trees
+registered beside the base, and the frozen hold-out, scored once, is the only remaining
+out-of-sample test. The next experiments go after the spike days themselves: features
+that describe why an evening spikes, and a model of the chance of a spike that the
+dispatch can bet on.
+
+---
+
 ## T3 · Wear against revenue (Phase 4: measured)
 
 **What breaks:** an optimizer that ignores wear cycles on every small spread. The
