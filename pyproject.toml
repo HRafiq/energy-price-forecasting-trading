@@ -29,6 +29,7 @@ dependencies = [
     "uvicorn==0.52.4",
     "openai>=3.14.1,<4",
     "anthropic>=1.6.0,<2",
+    "scipy>=1.17.1",
 ]
 
 [project.optional-dependencies]

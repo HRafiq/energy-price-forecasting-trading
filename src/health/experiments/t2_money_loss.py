@@ -3,8 +3,8 @@
     uv run python -m src.health.experiments.t2_money_loss --tune
     uv run python -m src.health.experiments.t2_money_loss --learning-rate 5 --trees 100
 
-The plan, fixed before any of this was written, is ``docs/plans/
-money_trained_forecast_plan.md`` (local). In short: the production model's q50 is
+The plan, fixed before any of this was written, is
+``docs/plans/money_trained_forecast_plan.md``. In short: the production model's q50 is
 kept as a fixed base, and K extra LightGBM trees are boosted on the SPO+ loss
 (Elmachtoub and Grigas, 2022), whose subgradient at quarter-hour t is
 ``-2 dt (net_real_t - net_shifted_t)``: the difference between the battery
@@ -13,11 +13,19 @@ schedules come from :mod:`src.trading.dispatch_lp`, the production optimiser's
 linear relaxation, solved with HiGHS. The corrected point values both legs of
 dispatch; the forecast ranges are not touched.
 
+After a validation run, ``--rival`` trades a cheap rival, the production q50 plus
+its mean residual per local hour over the last 42 training days, refit on the same
+calendar; ``--seeds`` refits three blocks with two other seeds for the correction
+trees; and ``--report`` rebuilds the results page from the saved artifacts with a
+robustness section: where the gain concentrates, by year, without the strongest
+quarter, the tuning grid, and against the rival and the seeds. ``--check-lp``
+compares the HiGHS relaxation with the production optimiser on 60 validation days.
+
 ``--tune`` runs the learning-rate grid on the tuning window (the forecast days
 before ``evaluation.validation_start``) and prints the profit of each setting at
 each checkpoint. A validation run takes one setting, walks forward over the
 validation window with the production refit cadence, trades both arms and writes
-``docs/results/t2_money_loss.md`` (local until adopted). The hold-out is never read.
+``docs/results/t2_money_loss.md``. The hold-out is never read.
 """
 
 from __future__ import annotations
@@ -51,7 +59,10 @@ from src.forecasting.models.common import (
     target_features,
     training_data,
 )
-from src.forecasting.models.gradient_boosting import LightGBMConformalModel
+from src.forecasting.models.gradient_boosting import (
+    DEFAULT_LGBM_PARAMS,
+    LightGBMConformalModel,
+)
 from src.forecasting.production import build_production_model
 from src.health.experiments.t1_mechanism import (
     BLOCKS,
@@ -70,10 +81,13 @@ __all__ = [
     "LEARNING_RATES",
     "MONEY",
     "REFIT_EVERY_DAYS",
+    "SEEDS",
+    "SEED_BLOCKS",
     "MoneyFit",
     "fit_block",
     "main",
     "refit_days",
+    "robustness",
     "spo_plus_gradient",
 ]
 
@@ -82,10 +96,15 @@ REFIT_EVERY_DAYS = 28
 LEARNING_RATES = (1.0, 5.0, 20.0)
 CHECKPOINTS = (25, 100)
 MONEY = "money"
-CANDIDATE = Strategy("money_point", MONEY, MONEY)
+LP_CHECK_DAYS = 60
 RECONCILE_EUR = 0.01
 BASE_TOLERANCE = 1e-6
 RESULTS_PATH = REPO_ROOT / "docs" / "results" / "t2_money_loss.md"
+RIVAL = "bias_hour"
+RIVAL_DAYS = 42
+#: One refit block in the strongest quarter, one in summer, one in winter.
+SEED_BLOCKS = (date(2024, 12, 7), date(2025, 6, 21), date(2026, 1, 31))
+SEEDS = (8, 9)
 
 
 def refit_days(days: Sequence[date], every: int = REFIT_EVERY_DAYS) -> list[date]:
@@ -206,8 +225,13 @@ def fit_block(
     learning_rate: float,
     trees: int,
     log: Callable[[str], None] = print,
+    seed: int | None = None,
 ) -> MoneyFit:
-    """Fit the production model for ``fit_day`` and boost ``trees`` money trees."""
+    """Fit the production model for ``fit_day`` and boost ``trees`` money trees.
+
+    ``seed`` reseeds the correction trees' row and column sampling only; the base
+    model keeps its own seed, so it still reproduces the saved q50.
+    """
     started = time.perf_counter()
     base = build_production_model(settings)
     if not isinstance(base, LightGBMConformalModel):
@@ -246,6 +270,7 @@ def fit_block(
         "objective": objective,
         "learning_rate": learning_rate,
         "boost_from_average": False,
+        **({"random_state": seed} if seed is not None else {}),
     }
     dataset = lgb.Dataset(data.features, data.target, init_score=init)
     booster = lgb.train(params, dataset, num_boost_round=trees)
@@ -506,6 +531,7 @@ def _validate(
         "model": PRODUCTION,
         "learning_rate": lr,
         "trees": trees,
+        "seed": int(DEFAULT_LGBM_PARAMS["random_state"]),
         "days": len(traded),
         "first_day": str(traded[0]),
         "last_day": str(traded[-1]),
@@ -547,10 +573,263 @@ def _validate(
     (out / "t2_money_loss_summary.json").write_text(
         json.dumps(summary, indent=2, default=str), encoding="utf-8"
     )
-    page = results_markdown(summary)
+    page = results_markdown(summary, robustness(pnl, _saved(settings)))
     RESULTS_PATH.write_text(page, encoding="utf-8")
     print(page)
     return summary
+
+
+def _saved(settings: Settings) -> pd.DataFrame:
+    return pd.read_parquet(
+        settings.data.processed_path
+        / "forecasts"
+        / "comparison"
+        / f"{PRODUCTION}.parquet"
+    )
+
+
+def _experiments(settings: Settings) -> Path:
+    out = settings.data.processed_path / "experiments"
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def _rival_points(saved: pd.DataFrame, timezone: str) -> pd.Series:
+    """q50 plus its mean residual per local hour over the days before each refit."""
+    days = sorted(saved["target_day"].unique())
+    fits = refit_days(days)
+    hour = pd.Series(
+        pd.DatetimeIndex(saved.index).tz_convert(timezone).hour, index=saved.index
+    )
+    residual = saved["actual"] - saved["q50"]
+    rival = pd.Series(np.nan, index=saved.index, dtype="float64")
+    for k, fit_day in enumerate(fits):
+        end = fits[k + 1] if k + 1 < len(fits) else days[-1] + timedelta(days=1)
+        window = (saved["target_day"] >= fit_day - timedelta(days=RIVAL_DAYS)) & (
+            saved["target_day"] < fit_day
+        )
+        bias = (
+            residual[window].groupby(hour[window]).mean().reindex(range(24)).fillna(0.0)
+        )
+        block = (saved["target_day"] >= fit_day) & (saved["target_day"] < end)
+        rival[block] = (
+            saved.loc[block, "q50"].to_numpy() + bias.reindex(hour[block]).to_numpy()
+        )
+    return rival
+
+
+def _rival(settings: Settings, workers: int) -> None:
+    saved = _saved(settings)
+    out = _experiments(settings)
+    summary = json.loads(
+        (out / "t2_money_loss_summary.json").read_text(encoding="utf-8")
+    )
+    money = pd.read_parquet(out / "t2_money_loss_points.parquet")[MONEY]
+    first, last = (
+        date.fromisoformat(summary["first_day"]),
+        date.fromisoformat(summary["last_day"]),
+    )
+    days = sorted(d for d in saved["target_day"].unique() if first <= d <= last)
+    points = pd.DataFrame(
+        {
+            RIVAL: _rival_points(saved, settings.market.timezone),
+            MONEY: money.reindex(saved.index),
+        }
+    )
+    _, pnl = _trade(settings, saved, points, [RIVAL, MONEY], days, workers)
+    pnl.to_parquet(out / "t2_money_loss_rival_pnl.parquet")
+    profit = pnl.groupby("strategy")["pnl_eur"].sum()
+    print(
+        f"rival {_eur(float(profit[RIVAL]))}, money {_eur(float(profit[MONEY]))}, "
+        f"control {_eur(float(profit[MEDIAN_FORECAST.name]))}"
+    )
+
+
+def _seed_job(args: tuple[Any, ...]) -> tuple[date, int, pd.Series]:
+    config, fit_day, seed, lr, trees = args
+    settings = load_settings(config)
+    inputs = pd.read_parquet(settings.data.inputs_path)
+    saved = _saved(settings)
+    days = sorted(saved["target_day"].unique())
+    fits = refit_days(days)
+    end = fits[fits.index(fit_day) + 1]
+    block = [d for d in days if fit_day <= d < end]
+    fit = fit_block(
+        inputs,
+        fit_day,
+        settings,
+        lr,
+        trees,
+        log=lambda t: print(t, flush=True),
+        seed=seed,
+    )
+    frame = _forecast_block(fit, inputs, block, settings, saved, (trees,))
+    return fit_day, seed, frame[f"{MONEY}_{trees}"]
+
+
+def _seeds(settings: Settings, config: Path | None, workers: int) -> None:
+    out = _experiments(settings)
+    summary = json.loads(
+        (out / "t2_money_loss_summary.json").read_text(encoding="utf-8")
+    )
+    lr, trees = float(summary["learning_rate"]), int(summary["trees"])
+    saved = _saved(settings)
+    money = pd.read_parquet(out / "t2_money_loss_points.parquet")[MONEY]
+    jobs = [(config, block, seed, lr, trees) for block in SEED_BLOCKS for seed in SEEDS]
+    parts: dict[str, list[pd.Series]] = {}
+    with ProcessPoolExecutor(max_workers=min(workers, len(jobs))) as pool:
+        for _, seed, series in pool.map(_seed_job, jobs):
+            parts.setdefault(f"seed{seed}", []).append(series)
+    points = pd.DataFrame({name: pd.concat(p) for name, p in parts.items()})
+    points[f"seed{summary.get('seed', 7)}"] = money.reindex(points.index)
+    days = sorted(saved.loc[saved.index.isin(points.index), "target_day"].unique())
+    _, pnl = _trade(settings, saved, points, list(points.columns), days, workers)
+    pnl.to_parquet(out / "t2_money_loss_seeds_pnl.parquet")
+    print(pnl.groupby("strategy")["pnl_eur"].sum().round(0).to_string())
+
+
+def _check_lp(settings: Settings) -> None:
+    """The relaxation against the MILP on real days: how often the objectives agree."""
+    from src.trading.optimizer import optimize_dispatch
+
+    saved = _saved(settings)
+    ev = settings.evaluation
+    days = sorted(
+        d
+        for d in saved["target_day"].unique()
+        if ev.validation_start <= d < ev.holdout_start
+    )
+    rng = np.random.default_rng(1)
+    sample = sorted(rng.choice(len(days), LP_CHECK_DAYS, replace=False))
+    programs: dict[tuple[int, float, tuple[bool, ...]], DayProgram] = {}
+    rows = []
+    for i in sample:
+        frame = saved[saved["target_day"] == days[i]].sort_index()
+        index = pd.DatetimeIndex(frame.index)
+        program, products = _programs_for(
+            index, frame[PRODUCT_COLUMN], settings.battery, programs
+        )
+        for column in ("q50", "actual"):
+            prices = frame[column].to_numpy(dtype="float64")
+            _, lp_value = solve_day(program, prices)
+            milp = optimize_dispatch(frame[column], settings.battery, products=products)
+            rows.append(
+                {
+                    "day": str(days[i]),
+                    "curve": column,
+                    "gap_eur": abs(lp_value - milp.objective_eur),
+                    "negative_price": bool((prices < 0).any()),
+                }
+            )
+    table = pd.DataFrame(rows)
+    mismatch = table[table["gap_eur"] > RECONCILE_EUR]
+    out = {
+        "days": LP_CHECK_DAYS,
+        "curves": len(table),
+        "mismatches": len(mismatch),
+        "mismatches_with_negative_price": int(mismatch["negative_price"].sum()),
+        "worst_gap_eur": float(table["gap_eur"].max()),
+        "curves_with_negative_price": int(table["negative_price"].sum()),
+    }
+    (_experiments(settings) / "t2_money_loss_lp_check.json").write_text(
+        json.dumps(out, indent=2), encoding="utf-8"
+    )
+    print(json.dumps(out, indent=2))
+
+
+def robustness(pnl: pd.DataFrame, saved: pd.DataFrame) -> dict[str, Any]:
+    """Where the gain sits: concentration, by year, without 2024 Q4, negative prices."""
+    profit = pnl.pivot(index="target_day", columns="strategy", values="pnl_eur")
+    diff = (profit[MONEY] - profit[MEDIAN_FORECAST.name]).sort_index()
+    total = float(diff.sum())
+    top = diff.sort_values(ascending=False).head(10)
+    stamps = pd.to_datetime(pd.Index(diff.index))
+    years = np.asarray(stamps.year)
+    q4 = (years == 2024) & (np.asarray(stamps.month) >= 10)
+    negative = (
+        saved.groupby("target_day")["actual"].min().reindex(diff.index) < 0
+    ).to_numpy()
+    return {
+        "total_eur": total,
+        "top_days": [{"day": str(d), "eur": float(v)} for d, v in top.items()],
+        "top10_share": float(top.sum() / total) if total else float("nan"),
+        "wins": int((diff > 0.005).sum()),
+        "losses": int((diff < -0.005).sum()),
+        "ties": int((diff.abs() <= 0.005).sum()),
+        "without_top10": mean_interval(diff.drop(top.index)),
+        "without_2024q4": mean_interval(diff[~q4]),
+        "by_year": {
+            str(year): mean_interval(diff[years == year]) for year in sorted(set(years))
+        },
+        "negative_price_days": mean_interval(diff[negative]),
+        "other_days": mean_interval(diff[~negative]),
+    }
+
+
+def _report(settings: Settings) -> None:
+    out = _experiments(settings)
+    summary = json.loads(
+        (out / "t2_money_loss_summary.json").read_text(encoding="utf-8")
+    )
+    pnl = pd.read_parquet(out / "t2_money_loss_pnl.parquet")
+    saved = _saved(settings)
+    extra = robustness(pnl, saved)
+    tuning_path = out / "t2_money_loss_tuning_pnl.parquet"
+    if tuning_path.exists():
+        tuning = pd.read_parquet(tuning_path)
+        totals = tuning.groupby("strategy")["pnl_eur"].sum()
+        control = float(totals[MEDIAN_FORECAST.name])
+        extra["tuning"] = {
+            "days": int(tuning["target_day"].nunique()),
+            "control": control,
+            "arms": {
+                str(name): float(value) - control
+                for name, value in totals.items()
+                if str(name).startswith(MONEY)
+            },
+        }
+    lp_path = out / "t2_money_loss_lp_check.json"
+    if lp_path.exists():
+        extra["lp_check"] = json.loads(lp_path.read_text(encoding="utf-8"))
+    rival_path = out / "t2_money_loss_rival_pnl.parquet"
+    if rival_path.exists():
+        rp = pd.read_parquet(rival_path).pivot(
+            index="target_day", columns="strategy", values="pnl_eur"
+        )
+        traded = saved["target_day"].isin(set(rp.index))
+        rival_points = _rival_points(saved, settings.market.timezone)
+        extra["rival"] = {
+            "vs_control": mean_interval(rp[RIVAL] - rp[MEDIAN_FORECAST.name]),
+            "money_minus_rival": mean_interval(rp[MONEY] - rp[RIVAL]),
+            "mae": float((rival_points - saved["actual"])[traded].abs().mean()),
+        }
+    seeds_path = out / "t2_money_loss_seeds_pnl.parquet"
+    if seeds_path.exists():
+        sp = pd.read_parquet(seeds_path).pivot(
+            index="target_day", columns="strategy", values="pnl_eur"
+        )
+        arms = {}
+        for name in sorted(c for c in sp.columns if str(c).startswith("seed")):
+            gain = sp[name] - sp[MEDIAN_FORECAST.name]
+            arms[name] = {
+                "total": float(gain.sum()),
+                "by_block": {
+                    str(b): float(
+                        gain[
+                            (gain.index >= b)
+                            & (gain.index < b + timedelta(days=REFIT_EVERY_DAYS))
+                        ].sum()
+                    )
+                    for b in SEED_BLOCKS
+                },
+            }
+        extra["seeds"] = {"days": len(sp), "arms": arms}
+    (out / "t2_money_loss_robustness.json").write_text(
+        json.dumps(extra, indent=2, default=str), encoding="utf-8"
+    )
+    page = results_markdown(summary, extra)
+    RESULTS_PATH.write_text(page, encoding="utf-8")
+    print(page)
 
 
 def _signed(value: float, places: int = 2) -> str:
@@ -567,7 +846,9 @@ def _eur(value: float) -> str:
     return f"€{value:,.0f}" if value >= 0 else f"-€{-value:,.0f}"
 
 
-def results_markdown(summary: dict[str, Any]) -> str:
+def results_markdown(
+    summary: dict[str, Any], extra: dict[str, Any] | None = None
+) -> str:
     arms, diff = summary["arms"], summary["difference"]
     adopted = summary["adopted"]
     lines = [
@@ -647,7 +928,98 @@ def results_markdown(summary: dict[str, Any]) -> str:
         f"against median dispatch, a difference of {_interval(diff['all'])} € a day.",
         "",
     ]
+    if extra:
+        lines += _robustness_lines(extra)
     return "\n".join(lines)
+
+
+def _robustness_lines(extra: dict[str, Any]) -> list[str]:
+    top = extra["top_days"]
+    lines = [
+        "## Where the gain sits",
+        "",
+        f"The money arm wins on {extra['wins']} days, loses on {extra['losses']} and "
+        f"ties within a cent on {extra['ties']}. The ten best days carry "
+        f"{100 * extra['top10_share']:.0f}% of the {_eur(extra['total_eur'])}; the two "
+        f"best are {top[0]['day']} ({_eur(top[0]['eur'])}) and {top[1]['day']} "
+        f"({_eur(top[1]['eur'])}).",
+        "",
+        "| days | money minus median, € a day |",
+        "|---|---|",
+        f"| all but the ten best | {_interval(extra['without_top10'])} |",
+        f"| all but October to December 2024 | {_interval(extra['without_2024q4'])} |",
+    ]
+    for year, item in extra["by_year"].items():
+        lines.append(f"| {year} ({item['days']} days) | {_interval(item)} |")
+    lines += [
+        f"| days with a negative price ({extra['negative_price_days']['days']}) | "
+        f"{_interval(extra['negative_price_days'])} |",
+        f"| other days ({extra['other_days']['days']}) | "
+        f"{_interval(extra['other_days'])} |",
+    ]
+    if "rival" in extra:
+        rival = extra["rival"]
+        lines += [
+            "",
+            "## Against a cheap rival",
+            "",
+            f"The rival adds to q50 its mean residual per local hour over the last "
+            f"{RIVAL_DAYS} training days, refit on the same calendar. Against median "
+            f"dispatch it made {_interval(rival['vs_control'])} € a day, with an MAE "
+            f"of {rival['mae']:.2f} €/MWh; the money arm beat it by "
+            f"{_interval(rival['money_minus_rival'])} € a day. The gain is not "
+            "reducible to a simple hour-of-day bias correction.",
+        ]
+    if "tuning" in extra:
+        tuning = extra["tuning"]
+        lines += [
+            "",
+            "## The tuning grid",
+            "",
+            f"On the {tuning['days']} tuning days before the validation window, "
+            f"median dispatch made {_eur(tuning['control'])}. Each setting against it:",
+            "",
+            "| setting | gain |",
+            "|---|---|",
+        ]
+        for name, gain in sorted(tuning["arms"].items(), key=lambda kv: -kv[1]):
+            lines.append(f"| {name} | {_eur(gain)} |")
+        lines += [
+            "",
+            "The setting with the highest tuning profit was used, as the plan fixed; "
+            "the margins between the four gentler settings are within noise.",
+        ]
+    if "lp_check" in extra:
+        lp = extra["lp_check"]
+        lines += [
+            "",
+            "## The relaxation against the optimiser",
+            "",
+            f"On {lp['days']} validation days, q50 and realised prices each, the HiGHS "
+            f"relaxation's objective differed from the production optimiser's by more "
+            f"than €0.01 on {lp['mismatches']} of {lp['curves']} curves, "
+            f"{lp['mismatches_with_negative_price']} of them with a negative price "
+            f"({lp['curves_with_negative_price']} curves have one); the worst gap was "
+            f"€{lp['worst_gap_eur']:.2f}.",
+        ]
+    if "seeds" in extra:
+        seeds = extra["seeds"]
+        lines += [
+            "",
+            "## Other seeds",
+            "",
+            f"Three refit blocks ({', '.join(str(b) for b in SEED_BLOCKS)}, "
+            f"{seeds['days']} days) refit with other seeds for the correction trees. "
+            "Gain against median dispatch, in euros:",
+            "",
+            "| seed | total | " + " | ".join(str(b) for b in SEED_BLOCKS) + " |",
+            "|---|---|" + "---|" * len(SEED_BLOCKS),
+        ]
+        for name, arm in seeds["arms"].items():
+            cells = " | ".join(_eur(arm["by_block"][str(b)]) for b in SEED_BLOCKS)
+            lines.append(f"| {name} | {_eur(arm['total'])} | {cells} |")
+    lines.append("")
+    return lines
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -661,10 +1033,34 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--trees", type=int, default=None)
+    parser.add_argument(
+        "--rival", action="store_true", help="trade the hour-bias rival"
+    )
+    parser.add_argument(
+        "--seeds", action="store_true", help="refit blocks, other seeds"
+    )
+    parser.add_argument(
+        "--report", action="store_true", help="rebuild the results page"
+    )
+    parser.add_argument(
+        "--check-lp", action="store_true", help="compare the relaxation with the MILP"
+    )
     args = parser.parse_args(argv)
     settings = load_settings(args.config)
     if args.tune:
         _tune(settings, args.config, args.workers)
+        return 0
+    if args.rival:
+        _rival(settings, args.workers)
+        return 0
+    if args.seeds:
+        _seeds(settings, args.config, args.workers)
+        return 0
+    if args.report:
+        _report(settings)
+        return 0
+    if args.check_lp:
+        _check_lp(settings)
         return 0
     if args.learning_rate is None or args.trees is None:
         parser.error("give --learning-rate and --trees, chosen on the tuning window")

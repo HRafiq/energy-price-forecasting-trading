@@ -75,6 +75,8 @@ Where the money is lost: about 40% of the gap to perfect foresight falls between
 
 Better pinball loss mostly means more profit: capture rises from 77.6% for a naive forecast to 90.9% for QRA. Among the four most accurate models, capture differs by only 2.1 points and does not follow the accuracy order. Synthetic forecasts show why: with the same €16/MWh average error, a level shift lost €44 over two years and random noise €24,800, while pulling the evening one hour early lost €24,800 with an error of only €7/MWh.
 
+So I tried the other direction: training the forecaster on the money. Keeping the production model as a fixed base, 100 extra trees are trained on a loss that rewards the battery's profit rather than the price error (SPO+, Elmachtoub and Grigas 2022), with the optimiser's linear relaxation solved 70,000 times per fit. Against a bar fixed before the run, on the 730 validation days it earned €2.93 a day more than median dispatch (95% interval +1.53 to +4.74), €2,138 over two years and 1.3 capture points, with the point's accuracy unchanged at 16.0 €/MWh: the corrections raise the morning and evening by about €1 and lower the night by about €1. The honest caveats: the ten best days carry 58% of the gain, two dark winter days a third, and 2025 alone only just clears zero. Checked afterwards: a cheap hour-of-day bias correction lost money, and other seeds gave the same result. The live pipeline still trades the median forecast.
+
 ### Model health
 
 I broke the pipeline on purpose and measured what it cost.
@@ -154,7 +156,7 @@ with `make airflow`.
 
 ## Three things I learned
 
-- Timing beat accuracy in my backtest: an evening forecast one hour early, with a €7/MWh average error, cost as much as random noise at €16/MWh.
+- Timing beat accuracy in my backtest: an evening forecast one hour early, with a €7/MWh average error, cost as much as random noise at €16/MWh. Turned around, a forecaster trained on the battery's profit instead of its error earned 1.4% more with the same accuracy.
 - Days with a negative price were 28% of my trading days but earned 37% of the battery's profit.
 - On my hold-out, forecasts too low between 18:00 and 21:00 caused 49% of the shortfall against perfect foresight.
 
@@ -193,8 +195,8 @@ config/settings.yaml     market, data sources, hold-out, battery, strategies, li
 src/ingest/              SMARD, Open-Meteo, fuel and ENTSO-E clients, data-quality checks
 src/features/            features built only from what is known at 11:40
 src/forecasting/         information set, walk-forward harness, eight models, hold-out runner
-src/trading/             battery, MILP optimiser, settlement, strategies, backtest, attribution
-src/health/              drift monitor, incident log, failure experiments (M1, M2, M3, T4, D1, D5), T1 follow-ups
+src/trading/             battery, MILP optimiser and its HiGHS relaxation, settlement, strategies, backtest, attribution
+src/health/              drift monitor, incident log, failure experiments (M1, M2, M3, T4, D1, D5), T1 and T2 follow-ups
 src/pipeline/            the daily live run: readiness, fallback chain, plan, model registry, refits, drift check
 dags/                    the Airflow DAG, thin: every task shells into src/
 src/export/              dashboard artifacts: forecasts, P&L grid, attribution

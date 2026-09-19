@@ -75,3 +75,31 @@ def test_a_flat_day_trades_nothing_and_the_price_count_is_checked(
     assert value == pytest.approx(0.0, abs=1e-9) and np.abs(net).max() < 1e-9
     with pytest.raises(ValueError, match="expected 96 prices"):
         solve_day(program, np.full(95, 50.0))
+
+
+def test_the_cycle_cap_binds_on_a_two_peak_day_in_both_solvers(
+    settings: Settings,
+) -> None:
+    index = pd.date_range("2025-03-10 23:00", periods=96, freq="15min", tz="UTC")
+    hour = np.arange(96) // 4
+    # Three dear windows with cheap valleys between: worth three cycles uncapped.
+    prices = pd.Series(
+        30.0 + 150.0 * np.isin(hour, [6, 7, 12, 13, 18, 19]) + np.arange(96) * 0.01,
+        index=index,
+    )
+    battery = settings.battery
+    program = DayProgram.build(96, 0.25, battery, None)
+
+    net, value = solve_day(program, prices.to_numpy())
+    milp = optimize_dispatch(prices, battery)
+
+    assert battery.max_cycles_per_day is not None
+    used = (0.25 / battery.discharge_efficiency * np.maximum(net, 0.0)).sum()
+    assert used == pytest.approx(
+        battery.max_cycles_per_day * battery.capacity_mwh, abs=1e-6
+    )
+    uncapped = DayProgram.build(
+        96, 0.25, battery.model_copy(update={"max_cycles_per_day": None}), None
+    )
+    assert solve_day(uncapped, prices.to_numpy())[1] > value + 1.0
+    assert value == pytest.approx(milp.objective_eur, abs=1e-6)

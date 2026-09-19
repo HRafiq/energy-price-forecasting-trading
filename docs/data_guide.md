@@ -759,6 +759,10 @@ after its thresholds are fixed on validation days.
 | `d1_missing_weather.json` | Scores, profit and the cost against the full model per arm | D1 |
 | `d5_deadline_daily.parquet` | Per day: injected failures, the fallback step used, submission time, on time or not, P&L with and without the chain | D5 |
 | `d5_deadline.json` | Setup, measured step runtimes and the summary | D5 |
+| `t2_money_loss_points.parquet` | The money-trained point per quarter-hour of the 730 validation days: the production q50 plus 100 SPO+ correction trees | T2 |
+| `t2_money_loss_pnl.parquet`, `t2_money_loss_tuning_pnl.parquet` | Daily P&L per strategy on the validation days, and on the 63 tuning days for every setting tried | T2 |
+| `t2_money_loss_summary.json`, `t2_money_loss_robustness.json` | The verdict, per-refit training losses, and where the gain sits: top days, by year, without 2024 Q4, the rival, the seeds | T2 |
+| `t2_money_loss_rival_pnl.parquet`, `t2_money_loss_seeds_pnl.parquet` | Daily P&L of the hour-bias rival, and of the three blocks refit with other seeds | T2 |
 
 A `--quick` D1 run writes the same files with a `d1_quick_` prefix, and short M1
 runs write to their own subfolder; neither feeds the dashboard or the docs.
