@@ -763,6 +763,8 @@ after its thresholds are fixed on validation days.
 | `t2_money_loss_pnl.parquet`, `t2_money_loss_tuning_pnl.parquet` | Daily P&L per strategy on the validation days, and on the 63 tuning days for every setting tried | T2 |
 | `t2_money_loss_summary.json`, `t2_money_loss_robustness.json` | The verdict, per-refit training losses, and where the gain sits: top days, by year, without 2024 Q4, the rival, the seeds | T2 |
 | `t2_money_loss_rival_pnl.parquet`, `t2_money_loss_seeds_pnl.parquet` | Daily P&L of the hour-bias rival, and of the three blocks refit with other seeds | T2 |
+| `t1_spike_forecasts_<arm>.parquet`, `t1_spike_pnl_<arm>.parquet`, `t1_spike_summary.json` | The spike-driver features experiment: walk-forward forecasts and daily P&L per arm, and the verdict with feature importance | T1 |
+| `t1_spike_probability_days.parquet`, `t1_spike_probability_pnl.parquet`, `t1_spike_probability_summary.json` | The spike-probability experiment: each validation day's probability and label, daily P&L per dispatch arm, and the verdict with the classifier's reliability table | T1 |
 
 A `--quick` D1 run writes the same files with a `d1_quick_` prefix, and short M1
 runs write to their own subfolder; neither feeds the dashboard or the docs.

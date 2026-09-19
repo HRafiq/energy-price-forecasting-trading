@@ -415,6 +415,96 @@ use.
 
 ---
 
+## T1 · What the evening loss does not respond to (validation: two experiments, both rejected)
+
+**The question in one line.** Of the money the battery misses against a trader who knows
+tomorrow's prices, about 40% is lost between 15:00 and 21:00, mostly on evenings when
+the real price jumps far above the forecast. Two experiments tried to fix that from the
+forecasting side. Each had its pass mark written down before it ran (the plans are
+`docs/plans/spike_features_plan.md` and `docs/plans/spike_probability_plan.md`): the
+change is adopted only if its mean daily profit gain over today's schedule, across the
+730 validation days, has a 95% range lying entirely above zero. The range is where the
+daily gain would land if the two years were redrawn in week-long pieces, so a gain
+counts only when it is too large to be a lucky run of days. Both experiments failed that
+mark, and the way they failed is the useful part, so they are reported together.
+
+Two words used throughout: the *dispatch* is the battery's plan for the day, when to
+charge and when to sell, which the optimiser builds from the price forecast; a
+*quarter-hour* is the market's 15-minute trading slot, 96 in a day.
+
+**Experiment 1: tell the model why evenings spike.** An evening spikes when solar has
+gone, demand is at its peak and the wind is low, so the price is set by gas plants and,
+on the worst days, by imports or reserve plants. Nine new columns were added that say
+this directly for the day ahead: the evening load forecast and how steeply it climbs
+from the afternoon, how much afternoon solar there is to lose, how still the evening
+wind will be, the evening residual load (demand minus wind and solar, the part the power
+stations must cover) and how it compares with the last week, and whether recent evenings
+spiked. The production model was refit with those columns, on exactly the same days and
+settings as before, and compared on the 730 validation days.
+
+*Result:* the battery made €148,944 with the columns against €149,498 without: €0.76 a
+day less, with a 95% range of -€1.97 to +€0.52, so no measurable change. The model
+barely used the columns (each took under 1% to 3% of its splitting gain), and the thing
+they were meant to fix hardly moved: on spike evenings the forecast ran €30/MWh too low
+before and €28/MWh too low after. The reason is plain once seen. The model already had
+the hour, the load forecast, the wind and solar forecasts and the gas price, so it could
+already tell that an evening would be tight; the next experiment's classifier, built
+from the same inputs, shows the signal is there, and the forecast's own upper range
+(q90, the price it puts a 90% chance of staying under) already averages €194 on spike
+evenings against a real €196. It still guessed low, because a model trained to be
+accurate on the typical evening hedges towards it. Missing day-level signals about
+whether the evening will be tight were not the problem.
+(docs/results/t1_spike_features.md)
+
+**Experiment 2: predict the chance of a spike, and let the dispatch bet on it.** A
+separate model was asked a question that allows an honest answer: how likely is it that
+this evening's price reaches €200? It answers with a probability, which it can state
+without hedging. It was trained on the same information, refit every 28 days like the
+forecaster, and turned out well: on the 730 validation days it put the spiky evening
+above the calm one 91% of the time (AUC 0.906), and its probabilities meant what they
+said: of the 61 days it put above 70%, 84% spiked; of the 607 days it put below 10%, 8%
+spiked. Two ways of using it were then tried in the dispatch, both fixed in advance.
+*Blend* raises the evening price the optimiser plans against from the median towards q90
+in proportion to the probability. *Hold back* requires the battery to be full at 17:00
+whenever the probability is at least one half, so the whole store is there for the
+evening.
+
+*Result:* blend made €0.65 a day less than today's dispatch (-€2.14 to +€0.49), hold
+back €0.27 a day more (-€0.27 to +€1.01). Neither range clears zero, so neither is
+adopted. Hold back fired on 74 days and on 62 of them changed nothing: when a spike is
+visible in the forecast, the optimiser already arrives at 17:00 full. It gained on 5
+days and lost on 7, and a single day (+€232) is larger than its whole +€199 total. Blend
+repeated what an earlier test had shown (T1 · Selling the window at q75 above): raising
+the evening valuation moves sales into 18:00 to 21:00 (+€5.09 a day) and out of the
+afternoon and the late evening (-€2.05 and -€2.47 a day), for no net gain.
+(docs/results/t1_spike_probability.md)
+
+**What the two say together, with the money-trained forecaster below (T2):**
+
+- The evening loss is not a shortage of day-level signals. The model can already see a
+  tight evening coming, and a good spike classifier built from the same inputs confirms
+  that the signal is there.
+- It is not a confidence problem either. Knowing that a spike is likely, with
+  probabilities that mean what they say, does not say which quarter-hour it lands in.
+  Holding charge for the evening is something the dispatch already does when the peak is
+  visible.
+- The one change that earned anything, the forecaster trained on the battery's profit,
+  worked by sharpening the shape of the evening by a euro or two, and its gain came from
+  a handful of dark, still winter evenings.
+- All of this is consistent with the earlier timing result (T2 · Error cost is not error
+  size: an evening shifted one hour early costs as much as random noise everywhere):
+  what is left is timing within the evening on spike days. Moving it would take a
+  forecast of the peak's shape, which quarter-hour and how high, on the days that spike.
+  Nothing tried here does that, and the data at hand gives no cheap way to; that is a
+  real information gap, at the quarter-hour rather than the day.
+
+**Why the failures are reported.** Each had its pass mark fixed before it ran, and a
+test that can only pass is not a test. The optimiser gained an optional floor on the
+state of charge for the hold-back rule, and the nine columns stay as an opt-in feature
+group; the production model and the live pipeline are unchanged.
+
+---
+
 ## T2 · Error cost is not error size (Phase 4: measured)
 
 **What breaks:** judging a forecaster by its average error. A battery's profit
