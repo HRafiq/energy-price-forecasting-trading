@@ -110,12 +110,16 @@ def optimize_dispatch(
     products: NDArray[np.int64] | None = None,
     integer: bool = True,
     time_limit_s: float = 60.0,
+    soc_floor: NDArray[np.float64] | None = None,
 ) -> DispatchResult:
     """Solve one delivery day's schedule.
 
     ``sell_prices`` values discharging and ``buy_prices`` values charging; both
     are €/MWh on the same regular index. ``products`` optionally labels periods
-    of one day-ahead product, which must be contiguous.
+    of one day-ahead product, which must be contiguous. ``soc_floor`` optionally
+    gives a lower bound in MWh on the state of charge at the end of each period,
+    NaN where there is none; a rule that holds charge back for the evening is
+    expressed this way.
     """
     index = pd.DatetimeIndex(sell_prices.index)
     if buy_prices is not None and not buy_prices.index.equals(sell_prices.index):
@@ -127,6 +131,11 @@ def optimize_dispatch(
     n = len(sell)
     dt = period_hours(index)
     _check_products(products, n)
+    if soc_floor is not None:
+        if len(soc_floor) != n:
+            raise ValueError("soc_floor must have one value per period")
+        if np.nanmax(soc_floor, initial=0.0) > battery.capacity_mwh + 1e-9:
+            raise ValueError("soc_floor cannot exceed the battery's capacity")
 
     problem = pulp.LpProblem("battery_dispatch", pulp.LpMaximize)
     charge = [
@@ -165,6 +174,10 @@ def optimize_dispatch(
         )
         previous = soc[t]
     problem += soc[n - 1] == battery.initial_soc_mwh, "end_at_start_soc"
+    if soc_floor is not None:
+        for t in range(n):
+            if np.isfinite(soc_floor[t]):
+                problem += soc[t] >= float(soc_floor[t]), f"soc_floor_{t}"
 
     if products is not None:
         for t in range(1, n):

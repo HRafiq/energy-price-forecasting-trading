@@ -677,3 +677,29 @@ def test_dispatch_quantiles_must_mirror_forecast_quantiles(levels: list[float]) 
     raw["trading"]["dispatch_quantiles"] = levels
     with pytest.raises(ValidationError):
         Settings.model_validate(raw)
+
+
+def test_a_state_of_charge_floor_holds_the_charge_back(settings: Settings) -> None:
+    """A floor at full charge before the evening is met, at a cost on the plan."""
+    from src.trading.optimizer import DispatchResult, optimize_dispatch
+
+    index = pd.date_range("2025-03-10 23:00", periods=96, freq="15min", tz="UTC")
+    hour = np.arange(96) // 4
+    # Cheap night, a dear early afternoon, a dearer evening.
+    prices = pd.Series(30.0 + 120.0 * (hour == 14) + 200.0 * (hour == 19), index=index)
+    battery = settings.battery
+    free = optimize_dispatch(prices, battery)
+    floor = np.full(96, np.nan)
+    floor[hour == 16] = battery.capacity_mwh  # full at the end of 16:00 to 16:59
+    held = optimize_dispatch(prices, battery, soc_floor=floor)
+
+    def at_17(result: DispatchResult) -> float:
+        return float(result.schedule.loc[hour == 16, "soc_mwh"].iloc[-1])
+
+    assert at_17(free) < battery.capacity_mwh - 0.1
+    assert at_17(held) == pytest.approx(battery.capacity_mwh)
+    assert held.objective_eur < free.objective_eur
+    with pytest.raises(ValueError, match="one value per period"):
+        optimize_dispatch(prices, battery, soc_floor=floor[:-1])
+    with pytest.raises(ValueError, match="capacity"):
+        optimize_dispatch(prices, battery, soc_floor=floor * 10)
