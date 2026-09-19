@@ -20,7 +20,8 @@ Timing, for delivery day D+1 forecast on day D:
   command every fit and every rung has ``pipeline.step_time_limit_s``; the task's
   own ``execution_timeout`` is only the backstop for a command that hangs outside
   them;
-* ``export_dashboard`` refreshes the dashboard, and ``check_deadline`` compares
+* ``export_dashboard`` refreshes the dashboard, including the live record the
+  Live tab reads, and ``check_deadline`` compares
   the time the forecast went out with the 12:00 gate. Airflow 3 dropped
   task-level SLAs, and its DAG-level deadline alerts are not usable from a test
   run, so the check is a task like any other: it writes a critical incident when
@@ -130,7 +131,7 @@ with DAG(
         bash_command=(
             # No --issued-utc: the export stamps the time it actually ran, not
             # the run's logical date, which is midnight.
-            f"{RUN} src.export.artifacts --steps core health "
+            f"{RUN} src.export.artifacts --steps core health live "
             f"--run-kind live --data-through {YESTERDAY}"
         ),
         trigger_rule=TriggerRule.ONE_SUCCESS,

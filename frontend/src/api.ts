@@ -552,6 +552,62 @@ function batteryParams(b: BatteryQuery): Params {
 // Endpoints
 // ------------------------------------------------------------------------------
 
+export interface LiveIncident {
+  incident_id: string;
+  type: IncidentType;
+  severity: "info" | "warning" | "critical";
+  status: "resolved" | "review";
+  source: string;
+  detail: string;
+}
+
+export interface LiveDay {
+  target_day: string;
+  /** "YYYY-MM-DD HH:MM" in the market's time zone. */
+  issued_local: string | null;
+  on_time: boolean;
+  minutes_before_gate: number | null;
+  /** The rung of the fallback chain that produced the forecast. */
+  step: string | null;
+  model: string | null;
+  model_version: string | null;
+  feeds_missing: string[];
+  refit: string | null;
+  planned_value_eur: number | null;
+  settled: boolean;
+  pnl_eur: number | null;
+  cycles: number | null;
+  settled_local: string | null;
+  incidents: LiveIncident[];
+}
+
+export interface LiveResponse {
+  generated_utc: string;
+  live_from: string;
+  timezone: string;
+  gate_local: string;
+  totals: {
+    days: number;
+    settled_days: number;
+    on_time_days: number;
+    production_days: number;
+    steps: Record<string, number>;
+    settled_pnl_eur: number;
+    planned_value_settled_days_eur: number;
+    open_incidents: number;
+  };
+  drift: {
+    status: string | null;
+    warming_up: boolean | null;
+    scored_days: number | null;
+    window_days: number | null;
+    through: string | null;
+    latest: { day: string; rolling_coverage_90: number; rolling_pinball_ratio: number; coverage_alert: boolean; pinball_alert: boolean } | null;
+    skipped: Array<{ day: string; reason: string }>;
+  } | null;
+  days: LiveDay[];
+}
+
 export const api = {
   health: (signal: AbortSignal) => getJson<Health>("/api/health", {}, signal),
 
@@ -597,6 +653,8 @@ export const api = {
     ),
 
   ops: (run: string, signal: AbortSignal) => getJson<OpsResponse>("/api/model-health/ops", { run }, signal),
+
+  live: (signal: AbortSignal) => getJson<LiveResponse>("/api/live", {}, signal),
 
   narrate: (request: NarrateRequest, signal: AbortSignal) =>
     postJson<NarrateResponse>("/api/narrate", request, signal),

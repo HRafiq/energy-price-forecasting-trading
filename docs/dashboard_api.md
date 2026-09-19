@@ -317,6 +317,53 @@ yet"`); `fallbacks` then still carries the observed count.
            "pinball_ratio": {"value": 1.937204, "threshold": 1.5, "alert": true}}}
 ```
 
+## Live record
+
+### `GET /api/live`
+
+The live pipeline's record, for the Live tab. The export's `live` step writes it as
+`live.json` at the dashboard root, beside the runs, so it is the same whichever run
+the tab is showing; the daily DAG refreshes it with the dashboard export. One entry
+per delivery day from `evaluation.live_from` on, joined from the run record the
+forecast wrote, the settlement once the day's prices were published, the incidents
+with source `pipeline` or `live_drift`, and the daily drift check's summary. Nothing
+is recomputed: every figure is copied from a record the pipeline wrote. `503` until
+the step has run.
+
+`issued_local` is in the market's time zone and `gate_local` the gate's clock time.
+A day with a pipeline incident but no run record, a run that produced no forecast,
+still gets an entry, with `step` null. `step` is the rung of
+the fallback chain that produced the forecast, `model_version` the registered version
+when that rung was the production model, `feeds_missing` what the readiness check
+found unpublished, `refit` what the scheduled refit did before the run. A day is
+`settled` once its settlement exists; until then `pnl_eur` and `cycles` are `null`.
+`totals` counts the days, how many made the gate, how many used the production
+model, the days per rung (`steps`), the incidents still under review, the settled
+profit and the planned value of the settled days. `drift` is the
+live drift check's status, its warm-up count, its latest rolling values once the
+window is full, and the days it skipped.
+
+```json
+{"generated_utc": "2026-09-19T17:48:36+00:00", "live_from": "2026-09-15",
+ "timezone": "Europe/Berlin", "gate_local": "12:00",
+ "totals": {"days": 3, "settled_days": 2, "on_time_days": 1, "production_days": 1,
+            "steps": {"production": 1, "seasonal_naive": 2},
+            "settled_pnl_eur": 713.74, "planned_value_settled_days_eur": 1072.22,
+            "open_incidents": 2},
+ "drift": {"status": "warming up: 1 of 28 scored days", "warming_up": true,
+           "scored_days": 1, "window_days": 28, "through": "2026-09-17", "latest": null,
+           "skipped": [{"day": "2026-09-17", "reason": "forecast by seasonal_naive"}]},
+ "days": [{"target_day": "2026-09-16", "issued_local": "2026-09-16 13:21",
+           "on_time": false, "minutes_before_gate": -1521.08,
+           "step": "production", "model": "lightgbm_conformal", "model_version": "1",
+           "feeds_missing": [], "refit": null, "planned_value_eur": 289.09,
+           "settled": true, "pnl_eur": 308.41, "cycles": 2.0,
+           "settled_local": "2026-09-16 13:13",
+           "incidents": [{"incident_id": "fc096f76f937437c", "type": "pipeline",
+                          "severity": "critical", "status": "review", "source": "pipeline",
+                          "detail": "Live run for 2026-09-16: every feed had arrived. ..."}]}]}
+```
+
 ## Desk briefing
 
 ### `POST /api/narrate`

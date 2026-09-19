@@ -18,7 +18,7 @@ A probabilistic price forecaster feeding a battery dispatch optimiser, backteste
 | Backtester | Walk-forward over two years, profit against perfect foresight, one frozen hold-out | Daily re-solve, Shapley attribution, block bootstrap |
 | Model health | Failure experiments measured in euros: a price regime shift, drift, a missing weather feed and the 12:00 deadline; an incident log | Walk-forward reruns, rolling alerts with thresholds fixed on validation, a fallback chain |
 | Live pipeline | A daily run that forecasts tomorrow, commits a schedule before the 12:00 gate and settles it the next day | Airflow DAG, readiness sensor with a deadline, fallback chain with a time limit on every step, MLflow model registry refit every 28 days, a daily drift check |
-| Dashboard | Forecast fan, calibration, error by hour, the day's schedule, cumulative profit for any battery from 0.5 to 5 MW and 1 to 4 hours, and a Model health tab | React and FastAPI over exported backtest results; one day's schedule solved on request |
+| Dashboard | Forecast fan, calibration, error by hour, the day's schedule, cumulative profit for any battery from 0.5 to 5 MW and 1 to 4 hours, a Model health tab, and a Live tab with every day the pipeline traded | React and FastAPI over exported backtest results; one day's schedule solved on request |
 | Desk briefing | Three to five sentences about the tab you are on, and three follow-up questions | A deterministic writer over that page's own numbers; a language model can be switched on, with every figure it writes checked against them before it is shown |
 
 ## Results
@@ -132,6 +132,9 @@ flowchart LR
   no limit of their own, and only the forecast task's 15-minute timeout covers them.
 - **A live day cannot be settled when it is traded,** so the run commits a plan and a
   separate step values it once prices publish.
+- **The dashboard's Live tab shows the record as it grows:** each delivery day's
+  bid time against the gate, which rung of the chain forecast it, the planned value
+  against what settled, cycles, incidents, and the drift monitor's warm-up count.
 - **The drift monitor runs on the live record,** with the thresholds fixed on
   validation: rolling 28-day 90% coverage below 74% or pinball loss above 1.5 times its
   validation median. It scores only settled days the production model forecast, needs

@@ -42,6 +42,11 @@ def test_installing_the_agents_switches_the_dag_on_and_removing_them_off() -> No
     assert "dags pause $(DAG_ID)" in remove
 
 
+def test_the_export_refreshes_the_live_record_every_day() -> None:
+    export = _between(DAG, 'task_id="export_dashboard"', 'task_id="check_deadline"')
+    assert "--steps core health live" in export
+
+
 def test_both_forecast_tasks_have_a_backstop_timeout() -> None:
     for task, end in (
         ('task_id="forecast"', 'task_id="forecast_late"'),
