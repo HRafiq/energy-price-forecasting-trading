@@ -17,7 +17,7 @@ import pandas as pd
 from numpy.typing import NDArray
 
 from src.config import PRICE_SERIES, Settings
-from src.features.build import FEATURE_GROUPS, build_features
+from src.features.build import EXTRA_FEATURE_GROUPS, FEATURE_GROUPS, build_features
 from src.forecasting.base import ForecastError
 from src.forecasting.information import InformationSet
 
@@ -38,10 +38,12 @@ FEATURE_HISTORY_DAYS = 10
 
 
 def feature_names(groups: Sequence[str]) -> list[str]:
-    unknown = [g for g in groups if g not in FEATURE_GROUPS]
+    """The feature columns of ``groups``, from the standard or the opt-in groups."""
+    known = {**FEATURE_GROUPS, **EXTRA_FEATURE_GROUPS}
+    unknown = [g for g in groups if g not in known]
     if unknown:
         raise ValueError(f"unknown feature groups {unknown}")
-    return [name for group in groups for name in FEATURE_GROUPS[group]]
+    return [name for group in groups for name in known[group]]
 
 
 def local_hours(index: pd.DatetimeIndex, tz: str) -> NDArray[np.int64]:

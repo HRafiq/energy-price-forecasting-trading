@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 from src.config import CARBON_COLUMN, GAS_COLUMN, PRICE_SERIES, Settings
-from src.features.build import FEATURE_GROUPS, build_features
+from src.features.build import EXTRA_FEATURE_GROUPS, FEATURE_GROUPS, build_features
 from src.forecasting.information import build_information_set, issue_time_utc
 from tests.fakes import day_clock_price, synthetic_market
 
@@ -59,7 +59,8 @@ def test_features_equal_those_built_from_the_information_set(
 
 
 def test_every_listed_feature_is_built(full_features: pd.DataFrame) -> None:
-    listed = [name for group in FEATURE_GROUPS.values() for name in group]
+    groups = {**FEATURE_GROUPS, **EXTRA_FEATURE_GROUPS}
+    listed = [name for group in groups.values() for name in group]
     assert list(full_features.columns) == listed
 
 
@@ -172,3 +173,50 @@ def test_a_measured_window_with_a_gap_is_empty(
 
     assert features["load_actual_last_24h_mw"].isna().all()
     assert features["wind_actual_last_24h_mw"].notna().all()
+
+
+def test_spike_drivers_are_one_value_per_day_from_the_right_windows(
+    settings: Settings, market: pd.DataFrame, full_features: pd.DataFrame
+) -> None:
+    day = date(2024, 6, 15)
+    rows = _day_rows(full_features, day)
+    local = pd.DatetimeIndex(rows.index).tz_convert(TZ)
+    evening = rows[(local.hour >= 17) & (local.hour <= 20)]
+    afternoon = rows[(local.hour >= 12) & (local.hour <= 15)]
+    for column in EXTRA_FEATURE_GROUPS["spike_drivers"]:
+        assert rows[column].nunique() == 1, column
+
+    assert rows["load_forecast_evening_mean_mw"].iloc[0] == pytest.approx(
+        evening["load_forecast_mw"].mean()
+    )
+    assert rows["load_forecast_evening_ramp_mw"].iloc[0] == pytest.approx(
+        evening["load_forecast_mw"].mean() - afternoon["load_forecast_mw"].mean()
+    )
+    assert rows["wx_radiation_afternoon_mean"].iloc[0] == pytest.approx(
+        afternoon["wx_radiation_mean"].mean()
+    )
+    assert rows["residual_persistence_evening_max_mw"].iloc[0] == pytest.approx(
+        evening["residual_load_persistence_mw"].max()
+    )
+    # Yesterday's evening prices, and the week before, from the market itself.
+    prices = market[PRICE_SERIES]
+    price_local = pd.DatetimeIndex(prices.index).tz_convert(TZ)
+    price_evening = prices[(price_local.hour >= 17) & (price_local.hour <= 20)]
+    evening_days = pd.Series(
+        price_evening.to_numpy(),
+        index=price_local[(price_local.hour >= 17) & (price_local.hour <= 20)].date,
+    )
+    by_day = evening_days.groupby(level=0).max()
+    yesterday = day - timedelta(days=1)
+    assert rows["price_prev_day_evening_max"].iloc[0] == pytest.approx(
+        by_day[yesterday]
+    )
+    week = [day - timedelta(days=k) for k in range(1, 8)]
+    assert rows["price_evening_max_7d"].iloc[0] == pytest.approx(
+        max(by_day[d] for d in week)
+    )
+    day_max = prices.groupby(price_local.date).max()
+    spikes = sum(
+        day_max[d] >= settings.evaluation.spike_threshold_eur_mwh for d in week
+    )
+    assert rows["spike_days_last_7d"].iloc[0] == spikes

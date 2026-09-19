@@ -15,7 +15,12 @@ following the column rules in ``config/settings.yaml``:
 * weather forecasts for day X issued two days ahead, averaged over onshore,
   offshore and southern points, with a simple wind-power curve;
 * fuels: the last gas and carbon prices published before day X-1, and the
-  short-run marginal cost of a gas plant they imply.
+  short-run marginal cost of a gas plant they imply;
+* spike drivers (``EXTRA_FEATURE_GROUPS``, opt-in): one value per day for how tight
+  the evening of day X looks: evening load and its ramp from the afternoon,
+  afternoon radiation and evening wind from the weather forecast, the evening
+  residual-load estimate and how it compares with the last seven days, and the
+  recent spike record in the prices of the week before.
 
 ``tests/test_features.py`` proves the rule: features built from a target day's
 information set equal features built from the full dataset for that day.
@@ -43,7 +48,13 @@ from src.features.clock import clock_minutes, clock_table, lag_by_clock, local_d
 from src.forecasting.information import issue_time_utc
 from src.timegrid import ensure_utc_index, expected_periods
 
-__all__ = ["FEATURE_GROUPS", "build_features"]
+__all__ = [
+    "AFTERNOON_HOURS",
+    "EVENING_HOURS",
+    "EXTRA_FEATURE_GROUPS",
+    "FEATURE_GROUPS",
+    "build_features",
+]
 
 #: Dataset columns the features read, besides the weather columns.
 BASE_INPUTS = (
@@ -120,6 +131,27 @@ FEATURE_GROUPS: dict[str, tuple[str, ...]] = {
     ),
     "fuels": (GAS_COLUMN, CARBON_COLUMN, "ccgt_marginal_cost_eur_mwh"),
 }
+#: Groups that are built but that a model uses only when it asks for them, so the
+#: production model's features do not change under it.
+EXTRA_FEATURE_GROUPS: dict[str, tuple[str, ...]] = {
+    "spike_drivers": (
+        "load_forecast_evening_mean_mw",
+        "load_forecast_evening_ramp_mw",
+        "wx_radiation_afternoon_mean",
+        "wx_wind_power_evening_mean",
+        "residual_persistence_evening_max_mw",
+        "residual_persistence_evening_z_7d",
+        "price_prev_day_evening_max",
+        "price_evening_max_7d",
+        "spike_days_last_7d",
+    ),
+}
+#: Local hours of the evening block the T1 split found dearest, and the afternoon.
+EVENING_HOURS = (17, 20)
+AFTERNOON_HOURS = (12, 15)
+#: Both windows fit inside the ten days of history every model is handed.
+SCARCITY_WINDOW_DAYS = 7
+SPIKE_MEMORY_DAYS = 7
 
 
 def _by_day(
@@ -154,6 +186,43 @@ def _row_mean(
     total = np.where(finite, stack, 0.0).sum(axis=0)
     valid = finite.all(axis=0) if require_all else count > 0
     return np.where(valid, total / np.maximum(count, 1), np.nan)
+
+
+def _window_by_day(
+    values: NDArray[np.float64],
+    dates: NDArray[np.object_],
+    hours: NDArray[np.int64],
+    window: tuple[int, int],
+    days_back: int,
+    how: str,
+) -> pd.Series:
+    """A daily statistic of ``values`` over the local hours ``window`` (inclusive).
+
+    Indexed by the day the statistic describes, shifted so that a row of day X
+    reads the value for day X minus ``days_back``. A day with no row in the window
+    gives NaN.
+    """
+    inside = (hours >= window[0]) & (hours <= window[1])
+    series = pd.Series(values[inside], index=pd.Index(dates[inside]))
+    daily = series.groupby(level=0).agg(how)
+    shift = timedelta(days=days_back)
+    return daily.reindex([day - shift for day in dates])
+
+
+def _trailing_days(
+    daily: pd.Series, dates: NDArray[np.object_], days: int, how: str
+) -> NDArray[np.float64]:
+    """``how`` over the ``days`` calendar days before each row's day."""
+    ordered = daily.sort_index()
+    out = np.full(len(dates), np.nan)
+    unique = sorted(set(dates))
+    lookup = {}
+    for day in unique:
+        window = ordered.loc[day - timedelta(days=days) : day - timedelta(days=1)]
+        lookup[day] = float(window.agg(how)) if len(window) else np.nan
+    for i, day in enumerate(dates):
+        out[i] = lookup[day]
+    return out
 
 
 def _wind_power(speed_kmh: NDArray[np.float64]) -> NDArray[np.float64]:
@@ -322,7 +391,55 @@ def build_features(frame: pd.DataFrame, settings: Settings) -> pd.DataFrame:
         gas + carbon * GAS_T_CO2_PER_MWH_THERMAL
     ) / CCGT_EFFICIENCY
 
-    ordered = [name for group in FEATURE_GROUPS.values() for name in group]
+    # Spike drivers: one value per day X, from what the rows above already hold.
+    hours = np.asarray(local.hour, dtype="int64")
+    load_evening = _window_by_day(
+        out["load_forecast_mw"], dates, hours, EVENING_HOURS, 0, "mean"
+    )
+    load_afternoon = _window_by_day(
+        out["load_forecast_mw"], dates, hours, AFTERNOON_HOURS, 0, "mean"
+    )
+    out["load_forecast_evening_mean_mw"] = load_evening.to_numpy(dtype="float64")
+    out["load_forecast_evening_ramp_mw"] = (load_evening - load_afternoon).to_numpy(
+        dtype="float64"
+    )
+    out["wx_radiation_afternoon_mean"] = _window_by_day(
+        out["wx_radiation_mean"], dates, hours, AFTERNOON_HOURS, 0, "mean"
+    ).to_numpy(dtype="float64")
+    out["wx_wind_power_evening_mean"] = _window_by_day(
+        out["wx_wind_power_onshore"], dates, hours, EVENING_HOURS, 0, "mean"
+    ).to_numpy(dtype="float64")
+    residual_evening = _window_by_day(
+        out["residual_load_persistence_mw"], dates, hours, EVENING_HOURS, 0, "max"
+    )
+    out["residual_persistence_evening_max_mw"] = residual_evening.to_numpy(
+        dtype="float64"
+    )
+    per_day = residual_evening.groupby(level=0).first()
+    trailing_mean = _trailing_days(per_day, dates, SCARCITY_WINDOW_DAYS, "mean")
+    trailing_std = _trailing_days(per_day, dates, SCARCITY_WINDOW_DAYS, "std")
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out["residual_persistence_evening_z_7d"] = np.where(
+            trailing_std > 0,
+            (out["residual_persistence_evening_max_mw"] - trailing_mean) / trailing_std,
+            np.nan,
+        )
+    price_values = price.to_numpy(dtype="float64")
+    evening_max = _window_by_day(price_values, dates, hours, EVENING_HOURS, 0, "max")
+    evening_by_day = evening_max.groupby(level=0).first()
+    out["price_prev_day_evening_max"] = _window_by_day(
+        price_values, dates, hours, EVENING_HOURS, 1, "max"
+    ).to_numpy(dtype="float64")
+    out["price_evening_max_7d"] = _trailing_days(
+        evening_by_day, dates, SPIKE_MEMORY_DAYS, "max"
+    )
+    day_max = pd.Series(price_values, index=pd.Index(dates)).groupby(level=0).max()
+    spike = (day_max >= settings.evaluation.spike_threshold_eur_mwh).astype("float64")
+    spike = spike.where(day_max.notna())
+    out["spike_days_last_7d"] = _trailing_days(spike, dates, SPIKE_MEMORY_DAYS, "sum")
+
+    groups = {**FEATURE_GROUPS, **EXTRA_FEATURE_GROUPS}
+    ordered = [name for group in groups.values() for name in group]
     missing = [name for name in ordered if name not in out]
     if missing:
         raise RuntimeError(
