@@ -154,6 +154,12 @@ flowchart LR
   history, and on the one day in 28 that a refit falls due, the whole two-year
   training window. An ordinary run downloads 86 days instead of eight years, and a
   windowed download never shortens a dataset that is already longer.
+- **A served model that cannot be loaded is an incident, not a substitution.**
+  When nothing is registered the chain fits a model on the spot, which is the
+  design. When a version *is* registered and will not load, the chain does the same
+  thing and the run would otherwise record it as the production model: same step,
+  not degraded, nothing said. That now writes a critical incident naming the version
+  it could not load. The bid still goes out, because a bid beats no bid.
 - **The model registry does not belong to the machine that wrote it.** MLflow records
   absolute paths, so a store restored under another root would send it looking for
   artifacts that are not there, and the chain would quietly fit a model of its own
