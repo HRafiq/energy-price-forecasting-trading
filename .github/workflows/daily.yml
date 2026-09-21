@@ -1,0 +1,199 @@
+# The daily desk, run by GitHub rather than by a laptop being switched on.
+#
+# The local Airflow DAG and this workflow both shell into src/, so neither is
+# the authority on what a run does. They are not identical: the DAG also exports
+# the dashboard, which this workflow does not, because the dashboard is built
+# and served from a machine that has the backtest artifacts. The runner bids,
+# settles, records and monitors; the dashboard is refreshed when the state is
+# pulled down and exported locally.
+#
+# What else differs is what surrounds them: a runner is a fresh machine, so the
+# state the desk must remember is checked out from the live-state branch before
+# the run and committed back to it after, and a failure opens an issue instead
+# of waiting to be noticed.
+#
+# Timing. The gate closes at 12:00 Berlin, which is 10:00 UTC in summer and
+# 11:00 UTC in winter, so summer is the case to size for. 07:30 UTC is 09:30
+# Berlin in summer and leaves 150 minutes; the retry at 08:45 UTC leaves 75,
+# which is well beyond the delay GitHub's scheduler adds under load. A retry is
+# free because the pipeline refuses a day that already has a committed
+# schedule, so the second run cannot bid again.
+#
+# No secrets. The daily path reads SMARD, Open-Meteo and the fuel prices, none
+# of which need a key. ENTSOE_API_KEY belongs to a separate cross-check that
+# this workflow does not run.
+#
+# History. A laptop pays for the years of market data once and keeps the cache;
+# a runner holds none, so it would pay again on every run for a bid that reaches
+# back a fortnight. src.pipeline.history sizes the window from what the day
+# actually needs: the drift monitor's rolling window on an ordinary day, and the
+# model's whole training window on the one day in 28 that a refit falls due.
+
+name: daily desk
+
+on:
+  schedule:
+    - cron: "30 7 * * *"
+    - cron: "45 8 * * *"
+  workflow_dispatch:
+    inputs:
+      day:
+        description: "Delivery day to bid for (default: tomorrow)"
+        required: false
+        type: string
+
+concurrency:
+  # Never two runs at once: they would race for the same committed schedule.
+  group: daily-desk
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  bid:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out the pipeline
+        uses: actions/checkout@v4
+
+      - name: Check out the desk's state
+        uses: actions/checkout@v4
+        with:
+          ref: live-state
+          path: .live-state
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install the project
+        run: uv sync --frozen
+
+      - name: Restore the desk's state
+        run: uv run python -m src.pipeline.state restore --store .live-state
+
+      - name: Work out the delivery day
+        id: day
+        run: |
+          day="${{ inputs.day }}"
+          if [ -z "$day" ]; then day=$(date -u -d "tomorrow" +%Y-%m-%d); fi
+          echo "delivery=$day" >> "$GITHUB_OUTPUT"
+          echo "settle=$(date -u -d "$day -1 day" +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "Bidding for $day"
+
+      - name: Work out how much history this run needs
+        id: history
+        run: |
+          days=$(uv run python -m src.pipeline.history \
+            --day ${{ steps.day.outputs.delivery }} | head -1)
+          echo "days=$days" >> "$GITHUB_OUTPUT"
+          echo "fetching $days days of history"
+
+      - name: Rebuild the market data
+        run: |
+          uv run python -m src.ingest.build_dataset \
+            --through ${{ steps.day.outputs.delivery }} \
+            --history-days ${{ steps.history.outputs.days }}
+          uv run python -m src.ingest.open_meteo \
+            --history-days ${{ steps.history.outputs.days }}
+          uv run python -m src.ingest.fuels
+          uv run python -m src.ingest.build_inputs
+
+      - name: Check the feeds
+        # Reported, never fatal: the fallback chain exists for a missing feed,
+        # and a bid made on a lesser rung beats no bid at all.
+        continue-on-error: true
+        run: uv run python -m src.pipeline.readiness --day ${{ steps.day.outputs.delivery }}
+
+      - name: Bid
+        run: uv run python -m src.pipeline.daily_run --day ${{ steps.day.outputs.delivery }}
+        # A plan committed by a run that then died leaves no run record, and the
+        # pipeline refuses to guess whether to keep or replace it. That is right,
+        # but it must be said once and looked at, not failed every run forever.
+
+      - name: Check the deadline
+        if: always()
+        run: uv run python -m src.pipeline.daily_run --day ${{ steps.day.outputs.delivery }} --check-deadline
+
+      - name: Settle yesterday
+        if: always()
+        run: uv run python -m src.pipeline.daily_run --day ${{ steps.day.outputs.settle }} --settle
+
+      - name: Record the days with no bid
+        if: always()
+        run: uv run python -m src.pipeline.gaps --through ${{ steps.day.outputs.settle }}
+
+      - name: Run the drift monitor
+        if: always()
+        run: uv run python -m src.pipeline.drift_check --through ${{ steps.day.outputs.settle }}
+
+      - name: Save the desk's state
+        if: always()
+        run: uv run python -m src.pipeline.state save --store .live-state
+
+      - name: Commit the state
+        if: always()
+        working-directory: .live-state
+        run: |
+          git config user.name "Hasan Rafiq"
+          git config user.email "hassan.rafiq182@gmail.com"
+          # -f because the pipeline's own .gitignore covers data/ and the
+          # registry; on this branch those files are the entire point.
+          git add -Af .
+          if git diff --cached --quiet; then
+            echo "the run changed nothing"
+            exit 0
+          fi
+          git commit -m "Desk state after the run for ${{ steps.day.outputs.delivery }}"
+          # Another run may have pushed while this one worked; rebase onto it
+          # rather than overwriting a record that is already on the branch.
+          for attempt in 1 2 3; do
+            if git push origin live-state; then exit 0; fi
+            echo "push attempt $attempt was rejected, rebasing onto the branch"
+            # A rebase that stops on a conflicting binary leaves a rebase in
+            # progress, and retrying the same command then fails on that rather
+            # than on the push. Abandon it and take the branch's file, because a
+            # later run's state already contains this run's.
+            git pull --rebase -X theirs origin live-state || git rebase --abort
+            sleep 5
+          done
+          exit 1
+
+      - name: Open an issue if the desk failed
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const day = "${{ steps.day.outputs.delivery }}";
+            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const title = `Daily desk failed for delivery day ${day}`;
+            const open = await github.rest.issues.listForRepo({
+              ...context.repo, state: "open", labels: "daily-desk",
+            });
+            const already = open.data.find((issue) => issue.title === title);
+            const body = [
+              `The scheduled run for delivery day ${day} did not finish.`,
+              ``,
+              `Run: ${url}`,
+              ``,
+              `If the gate at 12:00 Berlin has not passed, a rerun still bids.`,
+              `A day that already has a committed schedule is refused, so a rerun`,
+              `cannot bid twice.`,
+              ``,
+              `One case needs a person: if a run committed a schedule and died`,
+              `before writing its run record, every later run for that day fails`,
+              `until someone looks and reruns it with --replace.`,
+            ].join("\n");
+            if (already) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: already.number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                ...context.repo, title, body, labels: ["daily-desk"],
+              });
+            }

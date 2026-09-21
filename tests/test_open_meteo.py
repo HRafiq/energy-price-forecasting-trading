@@ -495,9 +495,9 @@ def test_main_writes_parquet_and_reports(
     seen: dict[str, Any] = {}
 
     def fake_download(
-        settings: Settings, end: date, *, as_of: pd.Timestamp
+        settings: Settings, end: date, *, as_of: pd.Timestamp, since: date | None = None
     ) -> pd.DataFrame:
-        seen.update(end=end, as_of=as_of)
+        seen.update(end=end, as_of=as_of, since=since)
         frame = _download(wx_settings, date(2024, 3, 3), FakeOpenMeteo())
         frame.iloc[:3, 0] = np.nan
         return frame
@@ -525,9 +525,9 @@ def test_main_defaults_end_to_two_days_after_today(
     seen: dict[str, Any] = {}
 
     def fake_download(
-        settings: Settings, end: date, *, as_of: pd.Timestamp
+        settings: Settings, end: date, *, as_of: pd.Timestamp, since: date | None = None
     ) -> pd.DataFrame:
-        seen.update(end=end, as_of=as_of)
+        seen.update(end=end, as_of=as_of, since=since)
         index = pd.date_range(T0, periods=4, freq=QUARTER_HOUR, name="timestamp_utc")
         return pd.DataFrame({"x": [1.0, 2.0, 3.0, 4.0]}, index=index)
 
@@ -549,3 +549,38 @@ def test_downloads_without_a_download_time_cache_nothing_as_settled(
     fake.calls.clear()
     _download(wx_settings, end, fake)
     assert len(fake.ranges()) == 6
+
+
+def test_a_windowed_download_asks_only_for_the_days_it_needs(
+    wx_settings: Settings,
+) -> None:
+    """A machine with no cache pays for every chunk, so it asks for fewer."""
+    api = FakeOpenMeteo()
+    end = date(2024, 5, 1)
+
+    download_weather_forecasts(
+        wx_settings, end, fetch_json=api, as_of=None, since=date(2024, 4, 20)
+    )
+    windowed = list(api.calls)
+    api.calls.clear()
+    download_weather_forecasts(wx_settings, end, fetch_json=api, as_of=None)
+
+    assert len(windowed) < len(api.calls)
+    assert all("2024-03" not in url for url in windowed)
+
+
+def test_a_window_earlier_than_the_configured_start_is_clamped(
+    wx_settings: Settings,
+) -> None:
+    api = FakeOpenMeteo()
+    end = date(2024, 3, 5)
+
+    download_weather_forecasts(
+        wx_settings, end, fetch_json=api, as_of=None, since=date(2020, 1, 1)
+    )
+
+    assert api.calls and all(
+        f"start_date={wx_settings.weather.start.isoformat()}" in url
+        or "start_date=2024-03" in url
+        for url in api.calls
+    )

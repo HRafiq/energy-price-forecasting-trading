@@ -37,6 +37,7 @@ from src.config import (
     Settings,
     load_settings,
 )
+from src.ingest.merge import merge_into
 from src.ingest.quality import QualityReport, assert_resolution, build_quality_report
 from src.ingest.smard import SmardClient
 from src.timegrid import HOUR
@@ -117,19 +118,29 @@ def _extend_through(
 
 
 def build_dataset(
-    settings: Settings, client: SmardClient, through: date | None = None
+    settings: Settings,
+    client: SmardClient,
+    through: date | None = None,
+    since: date | None = None,
 ) -> pd.DataFrame:
     """The SMARD dataset, trimmed at the last published price.
 
     ``through`` is for a live run: the rows of that local delivery day are kept even
     though its prices are not published yet (see ``_extend_through``).
+
+    ``since`` starts the download later than ``data.start``. A scheduled runner
+    holds no cache, so downloading years of history for a bid that reaches back
+    a fortnight is paid again on every run; ``since`` fetches the window the run
+    actually needs. The caller is responsible for keeping any longer dataset it
+    already had: see ``merge_into`` and the CLI's ``--history-days``.
     """
     missing = [name for name in REQUIRED_SERIES if name not in settings.smard.series]
     if missing:
         raise ValueError(f"smard.series is missing required columns: {missing}")
     volumes = _volume_columns(settings.smard.series)
 
-    start = settings.market.local_midnight_utc(settings.data.start)
+    first = settings.data.start if since is None else max(since, settings.data.start)
+    start = settings.market.local_midnight_utc(first)
     columns = {
         name: client.series(filter_id, name, start=start)
         for name, filter_id in settings.smard.series.items()
@@ -201,11 +212,26 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="live run: keep the rows of this local delivery day, prices unpublished",
     )
+    parser.add_argument(
+        "--history-days",
+        type=int,
+        default=None,
+        help="download only this many days before --through, or before today "
+        "when --through is not given, instead of everything from data.start. Rows "
+        "already in the dataset are kept, so this shortens the download, never "
+        "the dataset. Use src.pipeline.history to size it",
+    )
     args = parser.parse_args(argv)
 
     settings = load_settings(args.config)
     client = SmardClient(settings.smard, settings.data.raw_path / "smard")
-    frame = build_dataset(settings, client, through=args.through)
+    since = None
+    if args.history_days is not None:
+        anchor = args.through or date.today()
+        since = anchor - timedelta(days=args.history_days)
+    frame = build_dataset(settings, client, through=args.through, since=since)
+    if since is not None:
+        frame = merge_into(frame, settings.data.dataset_path)
     step = RESOLUTION_STEP[settings.data.modeling_resolution]
     switch = settings.market.local_midnight_utc(
         settings.market.quarter_hour_products_from

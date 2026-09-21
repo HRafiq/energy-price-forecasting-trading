@@ -88,6 +88,7 @@ import pandas as pd
 import requests
 
 from src.config import Settings, WeatherConfig, load_settings
+from src.ingest.merge import merge_into
 
 __all__ = [
     "ARCHIVE_LAG",
@@ -410,11 +411,16 @@ def download_weather_forecasts(
     as_of: pd.Timestamp | None = None,
     pause_s: float = DEFAULT_PAUSE_S,
     sleep: Sleep = time.sleep,
+    since: date | None = None,
 ) -> pd.DataFrame:
     """Forecasts issued ``lead_days`` ahead, per UTC quarter-hour.
 
-    Covers UTC days ``settings.weather.start`` through ``end`` inclusive. The
-    index ``timestamp_utc`` holds period starts, columns are
+    Covers UTC days ``settings.weather.start`` through ``end`` inclusive, or
+    ``since`` through ``end`` when ``since`` is later. A machine with no cache
+    pays for every chunk it asks for, so a scheduled run asks only for the days
+    it needs; the caller keeps whatever longer file it already had.
+
+    The index ``timestamp_utc`` holds period starts, columns are
     ``settings.weather.columns`` as floats, NaN where the API returned null. When
     ``as_of`` is given, values not genuinely archived at that instant are NaN
     too (see the module docstring).
@@ -422,6 +428,9 @@ def download_weather_forecasts(
     config = settings.weather
     if end < config.start:
         raise ValueError(f"end {end} is before weather.start {config.start}")
+    first_day = config.start if since is None else max(since, config.start)
+    if end < first_day:
+        raise ValueError(f"end {end} is before since {first_day}")
     if as_of is not None and as_of.tzinfo is None:
         raise ValueError("as_of must be timezone-aware")
     fetch = fetch_json or http_fetch_json(config.timeout_s, sleep=sleep)
@@ -431,7 +440,7 @@ def download_weather_forecasts(
 
     frames: list[pd.DataFrame] = []
     network_calls = 0
-    for first, last in chunk_ranges(config.start, fetch_end, config.request_days):
+    for first, last in chunk_ranges(first_day, fetch_end, config.request_days):
         url = build_request_url(config, first, last)
         path = cache_dir / f"{first.isoformat()}_{last.isoformat()}.json"
         meta_path = path.with_name(f"{path.stem}.meta.json")
@@ -457,7 +466,7 @@ def download_weather_forecasts(
 
     raw = pd.concat(frames)
     stamps = pd.date_range(
-        _utc_midnight(config.start),
+        _utc_midnight(first_day),
         _utc_midnight(fetch_end + timedelta(days=1)),
         freq=QUARTER_HOUR,
         inclusive="left",
@@ -467,7 +476,7 @@ def download_weather_forecasts(
         raw = mask_unpublished(raw, as_of, config.lead_days)
 
     grid = pd.date_range(
-        _utc_midnight(config.start),
+        _utc_midnight(first_day),
         _utc_midnight(end + timedelta(days=1)),
         freq=QUARTER_HOUR,
         inclusive="left",
@@ -489,14 +498,29 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="last UTC day, YYYY-MM-DD (default: today plus two days)",
     )
+    parser.add_argument(
+        "--history-days",
+        type=int,
+        default=None,
+        help="download only this many days before --end instead of everything "
+        "from weather.start. Rows already in the file are kept, so this shortens "
+        "the download, never the file. Use src.pipeline.history to size it",
+    )
     args = parser.parse_args(argv)
 
     settings = load_settings(args.config)
     as_of = pd.Timestamp.now(tz="UTC")
     end: date = args.end or as_of.date() + timedelta(days=2)
-    frame = download_weather_forecasts(settings, end, as_of=as_of)
+    since = (
+        None if args.history_days is None else end - timedelta(days=args.history_days)
+    )
+    frame = download_weather_forecasts(settings, end, as_of=as_of, since=since)
 
     out = settings.data.processed_path / OUTPUT_FILE
+    if since is not None:
+        # A windowed download must not shorten a longer file: the backtest reads
+        # the older rows. New rows win, so a revised value replaces its revision.
+        frame = merge_into(frame, out)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(f"{out.name}.tmp")
     frame.to_parquet(tmp)
