@@ -51,7 +51,12 @@ def _index(settings: Settings, day: date) -> pd.DatetimeIndex:
 
 
 def _save_forecast(
-    settings: Settings, day: date, *, step: str = "production", width: float = 50.0
+    settings: Settings,
+    day: date,
+    *,
+    step: str = "production",
+    width: float = 50.0,
+    kind: str = "live",
 ) -> pd.DatetimeIndex:
     """A flat fan around 100 EUR/MWh, ``width`` either side for q05 and q95."""
     index = _index(settings, day)
@@ -71,6 +76,7 @@ def _save_forecast(
     frame["target_day"] = day
     frame["issue_time_utc"] = datetime(2026, 1, 1, tzinfo=UTC)
     frame["chain_step"] = step
+    frame["kind"] = kind
     path = settings.data.processed_path / "forecasts" / "production" / f"{day}.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(path)
@@ -227,3 +233,30 @@ def test_twenty_seven_missed_days_still_cannot_alert(
     assert summary["status"] == "warming up: 27 of 28 scored days"
     assert summary["incidents"] == []
     assert dc.run_check(local, days[27], frame=prices)["status"] == "in alert"
+
+
+def test_a_reconstructed_day_is_not_scored(settings: Settings, tmp_path: Path) -> None:
+    """It was forecast after the fact, so it says nothing about the live model."""
+    local = _local(settings, tmp_path)
+    day = local.evaluation.live_from
+    index = _save_forecast(local, day, kind="backfill")
+
+    frame, skipped = dc.live_forecasts(local, day, _prices(index, 100.0)[PRICE_SERIES])
+
+    assert frame.empty
+    assert skipped == [{"day": str(day), "reason": "reconstructed, not a live bid"}]
+
+
+def test_a_forecast_saved_before_the_kind_column_is_still_scored(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """Every forecast written before the column existed was a live bid."""
+    local = _local(settings, tmp_path)
+    day = local.evaluation.live_from
+    index = _save_forecast(local, day)
+    path = local.data.processed_path / "forecasts" / "production" / f"{day}.parquet"
+    pd.read_parquet(path).drop(columns=["kind"]).to_parquet(path)
+
+    frame, skipped = dc.live_forecasts(local, day, _prices(index, 100.0)[PRICE_SERIES])
+
+    assert not frame.empty and skipped == []

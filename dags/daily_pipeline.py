@@ -20,6 +20,11 @@ Timing, for delivery day D+1 forecast on day D:
   command every fit and every rung has ``pipeline.step_time_limit_s``; the task's
   own ``execution_timeout`` is only the backstop for a command that hangs outside
   them;
+* ``record_gaps`` writes one incident per delivery day the desk did not bid on.
+  It runs before the export, so a day the pipeline never ran appears on the Live
+  tab as an outage on the same run that notices it, rather than a day later. It
+  inherits the forecast tasks' trigger rule, so the export still follows a
+  committed schedule and nothing else;
 * ``export_dashboard`` refreshes the dashboard, including the live record the
   Live tab reads, and ``check_deadline`` compares
   the time the forecast went out with the 12:00 gate. Airflow 3 dropped
@@ -28,7 +33,8 @@ Timing, for delivery day D+1 forecast on day D:
   the schedule was committed late, and leaves the run green so the missed gate is
   reported once, in the health log;
 * ``settle_yesterday`` values the schedule committed a day earlier, once the
-  auction has published its prices;
+  auction has published its prices. A day with no committed schedule is not a
+  failure: nothing was traded, so there is nothing to value and the task says so;
 * ``check_drift`` runs the drift monitor on every settled day the production model
   forecast, with the thresholds fixed on validation, and writes a drift incident
   when an alert starts. The export ran earlier in the same run, so the dashboard
@@ -126,6 +132,16 @@ with DAG(
         retries=0,
     )
 
+    # Placed between the forecast pair and the export, carrying the trigger rule
+    # the export used to have, so the export still runs exactly when a schedule
+    # was committed and the live record it writes already knows about the gaps.
+    gaps = BashOperator(
+        task_id="record_gaps",
+        bash_command=f"{RUN} src.pipeline.gaps --through {YESTERDAY}",
+        trigger_rule=TriggerRule.ONE_SUCCESS,
+        retries=1,
+    )
+
     export = BashOperator(
         task_id="export_dashboard",
         bash_command=(
@@ -134,7 +150,6 @@ with DAG(
             f"{RUN} src.export.artifacts --steps core health live "
             f"--run-kind live --data-through {YESTERDAY}"
         ),
-        trigger_rule=TriggerRule.ONE_SUCCESS,
     )
 
     check = BashOperator(
@@ -151,6 +166,7 @@ with DAG(
         retries=1,
     )
 
+
     drift = BashOperator(
         task_id="check_drift",
         bash_command=f"{RUN} src.pipeline.drift_check --through {YESTERDAY}",
@@ -159,4 +175,4 @@ with DAG(
     )
 
     [prices, weather, fuels] >> inputs >> wait
-    wait >> [forecast, forecast_late] >> export >> check >> settle >> drift
+    wait >> [forecast, forecast_late] >> gaps >> export >> check >> settle >> drift

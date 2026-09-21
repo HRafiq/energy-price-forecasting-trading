@@ -766,9 +766,17 @@ def main(argv: list[str] | None = None) -> int:
         from src.export.live import export_live
 
         live = export_live(settings, root)
+        totals = live["totals"]
+        aside = [
+            f"{totals['dark_days']} with no bid" if totals["dark_days"] else "",
+            f"{totals['reconstructed_days']} reconstructed"
+            if totals["reconstructed_days"]
+            else "",
+        ]
+        note = "".join(f", {part}" for part in aside if part)
         print(
-            f"live record written: {live['totals']['days']} days, "
-            f"{live['totals']['settled_days']} settled",
+            f"live record written: {totals['days']} days bid, "
+            f"{totals['settled_days']} settled{note}",
             flush=True,
         )
     print(f"wrote {run_dir}")

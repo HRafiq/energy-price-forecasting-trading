@@ -2,11 +2,18 @@
 
 The daily pipeline leaves one run record per delivery day (``pipeline/runs``),
 one settlement once the day's prices are published (``pipeline/settlements``),
-incidents in the health log with source ``pipeline`` and ``live_drift``, and the
-drift check's summary (``health/live_drift.json``). This module joins them into
+incidents in the health log with source ``pipeline``, ``live_drift`` and
+``desk_offline``, and the drift check's summary
+(``health/live_drift.json``). This module joins them into
 one file, ``<dashboard root>/live.json``, one entry per delivery day from
 ``evaluation.live_from`` on, with the totals a reader wants first: how many days
 are live, how many bids made the gate, what settled, and how the plan compared.
+
+A day the desk never bid on may carry a reconstruction: the same chain, run
+after the fact on the data that was available before its gate, to show what the
+model would have bid. It is recorded with ``kind`` ``backfill`` and it is kept
+out of every total that describes live trading, because it was not a bid. The
+totals count live days only; reconstructions are counted separately.
 
 Nothing here recomputes anything: every figure is copied from a record the
 pipeline wrote, so the tab shows what happened, as it was recorded.
@@ -29,7 +36,8 @@ __all__ = ["LIVE_FILE", "LIVE_SOURCES", "build_live_record", "export_live"]
 
 LIVE_FILE = "live.json"
 #: Incident sources the live pipeline writes.
-LIVE_SOURCES = frozenset({"pipeline", "live_drift"})
+LIVE_SOURCES = frozenset({"pipeline", "live_drift", "desk_offline"})
+KIND_LIVE = "live"
 
 
 def _read(path: Path) -> dict[str, Any] | None:
@@ -41,6 +49,11 @@ def _read(path: Path) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return loaded if isinstance(loaded, dict) else None
+
+
+def _gate_verdict(record: dict[str, Any]) -> bool:
+    """Whether a live bid made its gate, as the run record put it."""
+    return bool(record.get("on_time", False))
 
 
 def _number(value: object) -> float | None:
@@ -84,12 +97,13 @@ def build_live_record(settings: Settings) -> dict[str, Any]:
         record = _read(path)
         if record is not None and "target_day" in record:
             records[str(record["target_day"])] = record
-    # A run that produced no forecast wrote an incident but no run record; the
-    # day still gets a row, with no step, so the missed bid is not hidden.
+    # A run that produced no forecast, and a day the desk never ran at all,
+    # wrote an incident but no run record; the day still gets a row, with no
+    # step, so the missed bid is not hidden.
     incident_days = {
         day
         for day, items in by_day.items()
-        if any(i["source"] == "pipeline" for i in items)
+        if any(i["source"] in ("pipeline", "desk_offline") for i in items)
     }
     days: list[dict[str, Any]] = []
     for day in sorted(set(records) | incident_days):
@@ -99,11 +113,18 @@ def build_live_record(settings: Settings) -> dict[str, Any]:
         settlement = _read(settlements_dir / f"{day}.json")
         readiness = record.get("readiness")
         refit = record.get("refit")
+        # A run record written before the kind field existed was a live bid:
+        # nothing else could write one at the time.
+        kind = str(record.get("kind", KIND_LIVE)) if record else None
         days.append(
             {
                 "target_day": day,
+                # None for a day with no run record at all: the desk was dark.
+                "kind": kind,
                 "issued_local": _local_clock(record.get("issued_utc"), tz),
-                "on_time": bool(record.get("on_time", False)),
+                # None on a day that was not bid: it had no gate to make or
+                # miss, and False there would read as a missed gate.
+                "on_time": _gate_verdict(record) if kind == KIND_LIVE else None,
                 "minutes_before_gate": _number(record.get("minutes_before_gate")),
                 "step": record.get("step"),
                 "model": record.get("model"),
@@ -123,13 +144,21 @@ def build_live_record(settings: Settings) -> dict[str, Any]:
             }
         )
 
-    settled = [d for d in days if d["settled"]]
-    steps = Counter(str(d["step"]) for d in days)
+    # Every total below describes live trading, so it is computed over the days
+    # the desk actually bid. A reconstruction is reported beside them, never
+    # inside them: counting one as a bid would overstate the record.
+    live = [d for d in days if d["kind"] == KIND_LIVE]
+    reconstructed = [d for d in days if d["kind"] not in (None, KIND_LIVE)]
+    settled = [d for d in live if d["settled"]]
+    steps = Counter(str(d["step"]) for d in live)
     drift = _read(processed / "health" / "live_drift.json")
     totals = {
-        "days": len(days),
+        "days": len(live),
+        "dark_days": sum(1 for d in days if d["kind"] is None),
+        "reconstructed_days": len(reconstructed),
         "settled_days": len(settled),
-        "on_time_days": sum(1 for d in days if d["on_time"]),
+        "on_time_days": sum(1 for d in live if d["on_time"]),
+        "not_bid_days": sum(1 for d in days if d["kind"] != KIND_LIVE),
         "production_days": steps.get("production", 0),
         "steps": dict(sorted(steps.items())),
         "settled_pnl_eur": float(sum(d["pnl_eur"] or 0.0 for d in settled)),

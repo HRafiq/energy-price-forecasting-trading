@@ -20,6 +20,14 @@ function stepLabel(step: string | null): string {
   return STEP_LABELS[step] ?? step.replace(/_/g, " ");
 }
 
+/** A bid, a reconstruction of a day that was never bid, or a day the desk was off. */
+type Kind = "live" | "backfill" | "dark";
+
+function kindOf(day: LiveDay): Kind {
+  if (day.kind === null) return "dark";
+  return day.kind === "live" ? "live" : "backfill";
+}
+
 /** "13:21", from "2026-09-16 13:21". */
 function clockOf(local: string | null): string {
   return local ? local.slice(11) : "n/a";
@@ -35,6 +43,11 @@ function Totals({ live }: { live: LiveResponse }) {
   const settledDetail =
     t.settled_days > 0 ? `planned value of those days ${eur(t.planned_value_settled_days_eur)}` : undefined;
   const onTimeShare = t.days > 0 ? pct(t.on_time_days / t.days) : "n/a";
+  const notBid =
+    t.not_bid_days > 0
+      ? `${t.not_bid_days} ${t.not_bid_days === 1 ? "day" : "days"} the desk did not bid` +
+        (t.reconstructed_days > 0 ? `, ${t.reconstructed_days} of them reconstructed afterwards` : "")
+      : null;
   const productionShare = t.days > 0 ? pct(t.production_days / t.days) : "n/a";
   const drift = live.drift;
   const driftValue = drift ? (drift.warming_up ? `${drift.scored_days} of ${drift.window_days}` : drift.status ?? "n/a") : "not run";
@@ -56,7 +69,13 @@ function Totals({ live }: { live: LiveResponse }) {
     : "the daily drift check has not run";
   return (
     <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-      <Kpi label="Live delivery days" value={String(t.days)} note={`from ${longDay(live.live_from)}`} />
+      <Kpi
+        label="Live delivery days"
+        value={String(t.days)}
+        note={`from ${longDay(live.live_from)}`}
+        detail={notBid ? `Counts days the desk bid. Beside them: ${notBid}.` : undefined}
+        tone={t.not_bid_days > 0 ? C.warn : undefined}
+      />
       <Kpi
         label={`Bids before the ${live.gate_local} gate`}
         value={onTimeShare}
@@ -83,31 +102,41 @@ function Totals({ live }: { live: LiveResponse }) {
 }
 
 function DayRow({ day }: { day: LiveDay }) {
+  const kind = kindOf(day);
+  const bid = kind === "live";
   const late = !day.on_time;
   const fallback = day.step !== "production";
   const open = day.incidents.filter((i) => i.status === "review").length;
   return (
     <tr style={{ borderTop: `1px solid ${C.panelEdge}` }}>
-      <td className="px-2 py-1.5 text-left whitespace-nowrap" style={{ color: C.text }}>
+      <td className="px-2 py-1.5 text-left whitespace-nowrap" style={{ color: bid ? C.text : C.muted }}>
         {longDay(day.target_day)}
       </td>
       <td className="px-2 py-1.5 text-left whitespace-nowrap">
-        {clockOf(day.issued_local)}{" "}
-        <Pill label={late ? "after the gate" : "on time"} color={late ? C.neg : C.good} />
+        {bid ? (
+          <>
+            {clockOf(day.issued_local)} <Pill label={late ? "after the gate" : "on time"} color={late ? C.neg : C.good} />
+          </>
+        ) : (
+          <span style={{ color: C.muted }}>
+            not bid <Pill label={kind === "dark" ? "desk offline" : "reconstructed"} color={kind === "dark" ? C.neg : C.muted} />
+          </span>
+        )}
       </td>
-      <td className="px-2 py-1.5 text-left whitespace-nowrap">
+      <td className="px-2 py-1.5 text-left whitespace-nowrap" style={{ color: bid ? undefined : C.muted }}>
         {stepLabel(day.step)}
         {day.model_version ? ` v${day.model_version}` : ""}
         {day.refit === "refitted" ? <span style={{ color: C.good }}> · refit</span> : null}
-        {fallback && day.feeds_missing.length > 0 ? (
+        {kind === "backfill" ? <span style={{ color: C.muted }}> · run after the day</span> : null}
+        {bid && fallback && day.feeds_missing.length > 0 ? (
           <span style={{ color: C.muted }}> · missing {day.feeds_missing.join(", ")}</span>
         ) : null}
       </td>
       <td className="px-2 py-1.5 text-right" style={{ color: C.muted }}>
         {money(day.planned_value_eur)}
       </td>
-      <td className="px-2 py-1.5 text-right" style={{ color: day.settled ? C.text : C.muted }}>
-        {day.settled ? money(day.pnl_eur) : "not settled"}
+      <td className="px-2 py-1.5 text-right" style={{ color: day.settled && bid ? C.text : C.muted }}>
+        {!day.settled ? "not settled" : bid ? money(day.pnl_eur) : `would be ${money(day.pnl_eur)}`}
       </td>
       <td className="px-2 py-1.5 text-right" style={{ color: C.muted }}>
         {day.cycles === null ? "n/a" : num(day.cycles, 2)}
@@ -134,7 +163,7 @@ function Record({ data }: { data: LiveResponse }) {
       <Totals live={data} />
       <Panel
         title="The live record"
-        sub={`One row per delivery day the pipeline ran for, newest first, times in ${data.timezone} · exported ${utcDay(data.generated_utc)}. Planned value is what the schedule was worth on its own forecast; settled profit is what it earned at the published prices, net of wear.`}
+        sub={`One row per delivery day, newest first, times in ${data.timezone} · exported ${utcDay(data.generated_utc)}. Planned value is what the schedule was worth on its own forecast; settled profit is what it earned at the published prices, net of wear. A row marked "desk offline" was never bid, because the pipeline was not running; one marked "reconstructed" was forecast after the day from the data available before its gate, to show what the model would have bid. Neither counts as a live bid anywhere above.`}
       >
         {(() =>
             data.days.length === 0 ? (
