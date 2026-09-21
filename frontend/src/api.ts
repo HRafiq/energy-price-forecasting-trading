@@ -563,9 +563,12 @@ export interface LiveIncident {
 
 export interface LiveDay {
   target_day: string;
+  /** "live" for a bid, "backfill" for a reconstruction, null for a day the desk never ran. */
+  kind: string | null;
   /** "YYYY-MM-DD HH:MM" in the market's time zone. */
   issued_local: string | null;
-  on_time: boolean;
+  /** null on a day that was not bid: it had no gate to make or miss. */
+  on_time: boolean | null;
   minutes_before_gate: number | null;
   /** The rung of the fallback chain that produced the forecast. */
   step: string | null;
@@ -587,7 +590,12 @@ export interface LiveResponse {
   timezone: string;
   gate_local: string;
   totals: {
+    /** Live bids only: reconstructed and dark days are counted separately. */
     days: number;
+    /** Every day that was not bid, reconstructed or not. */
+    not_bid_days: number;
+    dark_days: number;
+    reconstructed_days: number;
     settled_days: number;
     on_time_days: number;
     production_days: number;

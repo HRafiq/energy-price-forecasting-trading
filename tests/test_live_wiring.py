@@ -60,5 +60,19 @@ def test_the_drift_check_runs_after_settling_on_the_settled_day() -> None:
     task = _between(DAG, 'task_id="check_drift"', "[prices, weather, fuels]")
     assert "src.pipeline.drift_check --through {YESTERDAY}" in task
     assert "settle >> drift" in DAG
-    drift = _between(MAKEFILE, "\ndrift:", "\ntest:")
+    drift = _between(MAKEFILE, "\ndrift:", "\ngaps:")
     assert "src.pipeline.drift_check --through $(DAY)" in drift
+
+
+def test_the_gap_scan_runs_before_the_export_that_publishes_it() -> None:
+    """An outage that the export has not seen yet is invisible for a whole day."""
+    task = _between(DAG, 'task_id="record_gaps"', 'task_id="export_dashboard"')
+    assert "src.pipeline.gaps --through {YESTERDAY}" in task
+    # It carries the trigger rule the export used to have, so the export still
+    # runs exactly when a schedule was committed.
+    assert "trigger_rule=TriggerRule.ONE_SUCCESS" in task
+    assert "forecast_late] >> gaps >> export" in DAG
+    export = _between(DAG, 'task_id="export_dashboard"', 'task_id="check_deadline"')
+    assert "trigger_rule" not in export
+    makefile = _between(MAKEFILE, "\ngaps:", "\nbackfill:")
+    assert "src.pipeline.gaps --through $(DAY)" in makefile

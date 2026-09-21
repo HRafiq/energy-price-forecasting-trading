@@ -68,8 +68,8 @@ DRIFT_WINDOWS = ("validation", "holdout", "all")
 INCIDENT_TYPES: tuple[str, ...] = get_args(IncidentType)
 MAX_LIMIT = 500
 #: Sources whose incidents record real events: the fixed rules over saved backtest
-#: outputs, and the live pipeline's own runs.
-OBSERVED_SOURCES = frozenset({OBSERVED, "pipeline"})
+#: outputs, the live pipeline's own runs, and the days it did not run at all.
+OBSERVED_SOURCES = frozenset({OBSERVED, "pipeline", "desk_offline"})
 #: Sources whose incidents are measured on real saved forecasts: the M2 experiment
 #: and the live pipeline's daily drift check.
 MEASURED_SOURCES = frozenset({"m2_drift", "live_drift"})

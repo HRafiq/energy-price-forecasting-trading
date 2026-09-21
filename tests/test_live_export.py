@@ -144,9 +144,13 @@ def test_the_live_record_joins_runs_settlements_incidents_and_drift(
     ]
     # Only the live pipeline's own incidents are attached; the D5 one is not.
     assert [i["source"] for i in day_two["incidents"]] == ["pipeline"]
+    assert day_one["kind"] == "live" and day_two["kind"] == "live"
     totals = record["totals"]
     assert totals == {
         "days": 2,
+        "not_bid_days": 0,
+        "dark_days": 0,
+        "reconstructed_days": 0,
         "settled_days": 1,
         "on_time_days": 1,
         "production_days": 1,
@@ -212,7 +216,65 @@ def test_a_run_that_produced_no_forecast_still_gets_a_row(
 
     row = next(d for d in record["days"] if d["target_day"] == day.isoformat())
     assert row["step"] is None and row["settled"] is False
-    assert row["on_time"] is False and row["planned_value_eur"] is None
+    assert row["on_time"] is None and row["planned_value_eur"] is None
     assert [i["incident_id"] for i in row["incidents"]] == [failure.incident_id]
     assert record["totals"]["open_incidents"] == 2
     assert "2026-09-30" not in [d["target_day"] for d in record["days"]]
+
+
+def test_a_reconstruction_appears_but_counts_in_no_live_total(
+    sources: Settings,
+) -> None:
+    """It was never bid, so it is not a live day, an on-time day or live profit."""
+    day = (sources.evaluation.live_from + timedelta(days=2)).isoformat()
+    _write(
+        sources.data.processed_path / "pipeline" / "runs" / f"{day}.json",
+        _record(day, "", False, "production", kind="backfill")
+        | {"issued_utc": None, "on_time": None, "minutes_before_gate": None},
+    )
+    _write(
+        sources.data.processed_path / "pipeline" / "settlements" / f"{day}.json",
+        {"pnl_eur": 999.0, "cycles": 1.5, "settled_utc": f"{day}T12:00:00+00:00"},
+    )
+
+    record = live.build_live_record(sources)
+
+    row = next(d for d in record["days"] if d["target_day"] == day)
+    assert row["kind"] == "backfill" and row["issued_local"] is None
+    # Not False: it had no gate to miss, and False reads as a missed gate.
+    assert row["on_time"] is None and row["minutes_before_gate"] is None
+    assert row["planned_value_eur"] == 300.0 and row["pnl_eur"] == 999.0
+    totals = record["totals"]
+    assert totals["reconstructed_days"] == 1 and totals["not_bid_days"] == 1
+    # Unchanged by the reconstruction: two live days, one settled, 308.41 earned.
+    assert totals["days"] == 2 and totals["settled_days"] == 1
+    assert totals["on_time_days"] == 1 and totals["production_days"] == 1
+    assert totals["settled_pnl_eur"] == 308.41
+    assert totals["steps"] == {"production": 1, "seasonal_naive": 1}
+
+
+def test_a_day_the_desk_never_ran_gets_a_row_of_its_own(
+    sources: Settings,
+) -> None:
+    day = sources.evaluation.live_from + timedelta(days=4)
+    dark = Incident(
+        incident_id=make_incident_id("desk_offline", "pipeline", day),
+        delivery_day=day,
+        detected_utc=datetime(2026, 9, 21, 10, 0, tzinfo=UTC),
+        type="pipeline",
+        severity="critical",
+        detail=f"No schedule was committed for {day}: the battery traded nothing.",
+        action="A scheduled runner would close this gap",
+        status="review",
+        source="desk_offline",
+    )
+    upsert_incidents([dark], default_path(sources))
+
+    record = live.build_live_record(sources)
+
+    row = next(d for d in record["days"] if d["target_day"] == day.isoformat())
+    assert row["kind"] is None and row["step"] is None and row["settled"] is False
+    assert row["on_time"] is None
+    assert [i["source"] for i in row["incidents"]] == ["desk_offline"]
+    assert record["totals"]["dark_days"] == 1 and record["totals"]["days"] == 2
+    assert record["totals"]["not_bid_days"] == 1

@@ -135,6 +135,18 @@ flowchart LR
 - **The dashboard's Live tab shows the record as it grows:** each delivery day's
   bid time against the gate, which rung of the chain forecast it, the planned value
   against what settled, cycles, incidents, and the drift monitor's warm-up count.
+- **A day the pipeline did not run is shown, not hidden.** It runs only while the
+  machine hosting it is on, so a day it missed has no bid at all. Each of those days
+  gets its own incident and its own row, and every figure that describes live trading
+  is counted over the days the desk actually bid. A day the pipeline ran and failed
+  on is not counted as an outage: that run writes its own incident, and the machine
+  was not the problem.
+- **A missed day can be reconstructed, and a reconstruction never passes for a bid.**
+  The same chain can forecast a past day from the data that was available before its
+  gate, to show what the model would have bid. It is refused if the registered model
+  was fitted after that day, it never refits, it has no issue time and no gate verdict,
+  it writes no incident, the drift monitor leaves it out, and the Live tab marks it
+  "reconstructed". It does not close the day's gap: the battery still traded nothing.
 - **The drift monitor runs on the live record,** with the thresholds fixed on
   validation: rolling 28-day 90% coverage below 74% or pinball loss above 1.5 times its
   validation median. It scores only settled days the production model forecast, needs
@@ -155,6 +167,15 @@ published price, and on a live day that is the whole day being forecast. A live 
 now keeps the delivery day's rows with the price left blank, the readiness check
 rebuilds its inputs each time it polls, and a rerun never replaces a committed
 schedule.
+
+The machine was then off from 18 to 20 September. A bid for delivery day D is made
+on D-1, so delivery days 19, 20 and 21 September were never bid, and all three are
+recorded as outages. The 19th and 20th were reconstructed afterwards on version 1,
+the model that was already serving on those days: planned €330 and €253, worth €220
+and €84 at the published prices. Neither counts in the live totals, and the Live tab
+marks them "reconstructed"; the 21st, which has no forecast at all, is marked "desk
+offline". The run for 22 September went out at 11:53 Berlin, six minutes before the
+gate, on the production model with all four feeds complete.
 
 Run it without Airflow with `make pipeline DAY=2026-09-17`, or start the scheduler
 with `make airflow`.
@@ -237,6 +258,8 @@ make airflow    # scheduler and UI at http://127.0.0.1:8080
 make pipeline   # one live run without Airflow: make pipeline DAY=2026-09-17
 make settle     # value a committed schedule once prices publish: make settle DAY=2026-09-17
 make drift      # drift monitor on the live record through a day: make drift DAY=2026-09-17
+make gaps       # record the delivery days the desk did not bid on: make gaps DAY=2026-09-21
+make backfill   # reconstruct a missed day, marked as a reconstruction: make backfill DAY=2026-09-19
 make launchd-install # macOS: switch the daily DAG on, keep Airflow running from login and the Mac awake for the run
 make dashboard  # build the React app and serve it with the API at http://127.0.0.1:8000
 make test       # ruff, strict mypy, pytest

@@ -104,6 +104,13 @@ def live_forecasts(
         if not settings.evaluation.live_from <= day <= through:
             continue
         frame = pd.read_parquet(path)
+        # A reconstruction was made after the day it forecasts, from a saved
+        # model, with no gate to meet. Scoring it would mix it into the live
+        # model's record, which is exactly what the monitor is watching.
+        kind = str(frame["kind"].iloc[0]) if "kind" in frame.columns else "live"
+        if kind != "live":
+            skipped.append({"day": str(day), "reason": "reconstructed, not a live bid"})
+            continue
         step = str(frame["chain_step"].iloc[0])
         if step != PRODUCTION_STEP:
             skipped.append({"day": str(day), "reason": f"forecast by {step}"})

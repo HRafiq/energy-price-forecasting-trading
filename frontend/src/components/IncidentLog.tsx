@@ -30,6 +30,7 @@ const SOURCE_NAMES: Record<string, string> = {
   m2_drift: "drift monitor",
   live_drift: "live drift monitor",
   pipeline: "live pipeline",
+  desk_offline: "desk offline",
   d5_deadline: "D5 deadline",
 };
 

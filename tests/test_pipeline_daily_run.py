@@ -535,3 +535,17 @@ def test_the_issue_time_is_taken_after_the_refit(
 
     assert record.issued_utc == datetime(2026, 9, 16, 10, 5, tzinfo=UTC)
     assert record.on_time is False
+
+
+def test_settling_a_day_that_was_never_traded_is_not_a_failure(
+    settings: Settings,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The desk was dark: there is no schedule to value, and no error either."""
+    local = _local(settings, tmp_path)
+    monkeypatch.setattr(dr, "load_settings", lambda path: local)
+
+    assert dr.main(["--day", str(LIVE_DAY), "--settle"]) == 0
+    assert "nothing to settle" in capsys.readouterr().out

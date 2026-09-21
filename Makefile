@@ -124,6 +124,12 @@ settle:
 drift:
 	$(UV) python -m src.pipeline.drift_check --through $(DAY)
 
+gaps:
+	$(UV) python -m src.pipeline.gaps --through $(DAY)
+
+backfill:
+	$(UV) python -m src.pipeline.daily_run --day $(DAY) --backfill
+
 test:
 	$(UV) ruff check .
 	$(UV) mypy

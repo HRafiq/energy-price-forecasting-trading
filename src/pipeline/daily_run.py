@@ -61,6 +61,7 @@ from src.pipeline.model_source import (
     RefitOutcome,
     load_model,
     refresh_production_model,
+    served_version,
 )
 from src.pipeline.plan import (
     Plan,
@@ -73,6 +74,8 @@ from src.pipeline.plan import (
 from src.pipeline.readiness import Readiness, check_readiness
 
 __all__ = [
+    "KIND_BACKFILL",
+    "KIND_LIVE",
     "SOURCE",
     "IncompleteRunError",
     "PlanExistsError",
@@ -87,6 +90,14 @@ __all__ = [
 
 SOURCE = "pipeline"
 DATA_FEEDS = frozenset({"prices", "load_forecast", "weather", "fuels"})
+#: A schedule submitted to the auction before the gate: a real bid.
+KIND_LIVE = "live"
+#: Refit outcomes that earn an incident: the served version stayed in place.
+FAILED_REFITS = frozenset({"failed", "postponed"})
+#: A day the desk never bid on, forecast after the fact from the data that was
+#: available before its gate. It is not a bid, and nothing that counts bids,
+#: scores the live model or reports live profit may include it.
+KIND_BACKFILL = "backfill"
 
 
 @dataclass(frozen=True)
@@ -94,9 +105,11 @@ class RunRecord:
     """What one live day did, and whether it made the gate."""
 
     target_day: date
-    issued_utc: datetime
+    #: None for a reconstruction: nothing was submitted, so nothing was issued.
+    issued_utc: datetime | None
     gate_utc: datetime
-    on_time: bool
+    #: None for a reconstruction: no gate applied to a day that was not bid.
+    on_time: bool | None
     step: str
     model: str
     model_version: str | None
@@ -105,6 +118,7 @@ class RunRecord:
     planned_value_eur: float
     solve_seconds: float
     incidents: tuple[str, ...] = field(default_factory=tuple)
+    kind: str = KIND_LIVE
 
     @property
     def degraded(self) -> bool:
@@ -113,11 +127,18 @@ class RunRecord:
     def as_dict(self) -> dict[str, Any]:
         return {
             "target_day": str(self.target_day),
-            "issued_utc": self.issued_utc.isoformat(timespec="seconds"),
+            "kind": self.kind,
+            "issued_utc": (
+                self.issued_utc.isoformat(timespec="seconds")
+                if self.issued_utc is not None
+                else None
+            ),
             "gate_utc": self.gate_utc.isoformat(timespec="seconds"),
             "on_time": self.on_time,
-            "minutes_before_gate": round(
-                (self.gate_utc - self.issued_utc).total_seconds() / 60, 2
+            "minutes_before_gate": (
+                round((self.gate_utc - self.issued_utc).total_seconds() / 60, 2)
+                if self.issued_utc is not None
+                else None
             ),
             "step": self.step,
             "model": self.model,
@@ -152,12 +173,20 @@ def _forecast_path(settings: Settings, day: date) -> Path:
     return settings.data.processed_path / "forecasts" / "production" / f"{day}.parquet"
 
 
-def _save_forecast(forecast: QuantileForecast, step: str, settings: Settings) -> Path:
+def _save_forecast(
+    forecast: QuantileForecast,
+    step: str,
+    settings: Settings,
+    kind: str = KIND_LIVE,
+) -> Path:
     table = forecast.values.copy()
     table.insert(0, "model", forecast.model)
     table["target_day"] = forecast.target_day
     table["issue_time_utc"] = forecast.issue_time_utc
     table["chain_step"] = step
+    # The drift monitor reads this folder and must score live bids only, so the
+    # file says which it is rather than relying on a caller to remember.
+    table["kind"] = kind
     path = _forecast_path(settings, forecast.target_day)
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(f".{path.name}.partial")
@@ -268,6 +297,29 @@ class IncompleteRunError(RuntimeError):
     """A plan was saved but the run that saved it never wrote its run record."""
 
 
+def _refuse_leaking_reconstruction(settings: Settings, target_day: date) -> None:
+    """Refuse to reconstruct a day with a model that did not exist on it.
+
+    A reconstruction is only worth reading if it used what the desk had. The
+    registered version records the first delivery day it forecast; a version
+    that started after ``target_day`` was fitted on data including the day it
+    would be reconstructing, which is not a forecast at all.
+    """
+    served = served_version(settings)
+    if served is None:
+        raise ValueError(
+            f"no registered production model, so {target_day} cannot be "
+            "reconstructed with the model that was serving on it"
+        )
+    version, forecasts_from = served
+    if forecasts_from > target_day:
+        raise ValueError(
+            f"the served model version {version} forecasts from {forecasts_from}, "
+            f"after {target_day}: it was fitted on data the desk did not have "
+            "before that gate, so it cannot reconstruct the day"
+        )
+
+
 def run_day(
     settings: Settings,
     target_day: date,
@@ -276,11 +328,22 @@ def run_day(
     use_registry: bool = True,
     now_utc: datetime | None = None,
     replace: bool = False,
+    kind: str = KIND_LIVE,
 ) -> RunRecord:
     """Forecast and commit one delivery day, and record what happened.
 
     A day that already has a committed schedule is refused unless ``replace`` is set.
+
+    With ``kind`` set to ``KIND_BACKFILL`` the same chain reconstructs a past day
+    the desk never bid on. The reconstruction is marked as one throughout: it has
+    no issue time and no gate verdict, it writes no operational incident, it does
+    not refit the served model, and the saved forecast records its kind so the
+    drift monitor leaves it out. It does not make the day a traded one.
     """
+    if kind not in (KIND_LIVE, KIND_BACKFILL):
+        raise ValueError(
+            f"kind must be {KIND_LIVE!r} or {KIND_BACKFILL!r}, not {kind!r}"
+        )
     if target_day < settings.evaluation.live_from:
         raise ValueError(
             f"{target_day} is before live_from {settings.evaluation.live_from}; "
@@ -288,6 +351,18 @@ def run_day(
         )
     committed = plan_path(settings, target_day)
     recorded = record_path(settings, target_day)
+    if replace and recorded.exists():
+        # --replace repairs a run; it must not turn a reconstruction into a bid
+        # (which would add a day the desk never traded to the live totals) or a
+        # bid into a reconstruction (which would erase one it did).
+        on_record = json.loads(recorded.read_text(encoding="utf-8"))
+        was = str(on_record.get("kind", KIND_LIVE))
+        if was != kind:
+            raise ValueError(
+                f"{target_day} is on record as {was!r} and this run is {kind!r}; "
+                "a rerun may not change what a day was. Remove the record by hand "
+                "if that is really what you mean"
+            )
     if not replace and recorded.exists():
         # A bid submitted at the gate is final. Airflow starts a run for the latest
         # slot it missed, and without this a rerun would commit a second, later
@@ -306,6 +381,16 @@ def run_day(
         )
     issue_day = target_day - timedelta(days=1)
     gate_utc = _clock_utc(issue_day, settings.market.gate_closure_local, settings)
+    if kind == KIND_BACKFILL:
+        # Only a precondition, read before the work starts; the issue time below
+        # is stamped after it, and a reconstruction has none at all.
+        if (now_utc or datetime.now(UTC)) < gate_utc:
+            raise ValueError(
+                f"the gate for {target_day} closes at {gate_utc:%Y-%m-%d %H:%M} UTC "
+                "and has not yet passed; bid the day instead of reconstructing it"
+            )
+        if use_registry:
+            _refuse_leaking_reconstruction(settings, target_day)
 
     inputs = frame if frame is not None else pd.read_parquet(settings.data.inputs_path)
     readiness = check_readiness(inputs, target_day, settings)
@@ -315,12 +400,19 @@ def run_day(
     registry_note = "registry not used"
     refit: RefitOutcome | None = None
     if use_registry:
-        refit = _scheduled_refit(settings, target_day, inputs, readiness)
+        # A reconstruction must not refit: the refit would train on data from
+        # after the day it is about to forecast.
+        if kind == KIND_LIVE:
+            refit = _scheduled_refit(settings, target_day, inputs, readiness)
         model, version, registry_note = _model_from_registry(settings)
 
     try:
         result = run_chain(inputs, target_day, settings, readiness, model=model)
     except ForecastError as exc:
+        if kind != KIND_LIVE:
+            # Nothing was at stake: no gate closed without a bid, because no bid
+            # was ever going to be made for a day already past.
+            raise
         failed_utc = now_utc or datetime.now(UTC)
         failure = Incident(
             incident_id=make_incident_id(SOURCE, "pipeline", target_day),
@@ -337,10 +429,13 @@ def run_day(
         raise
     # Stamped once the forecast exists, after the refit and the chain, so the time
     # they took counts against the gate; only the plan's own solve comes after it.
-    issued_utc = now_utc or datetime.now(UTC)
-    on_time = issued_utc < gate_utc
+    # A reconstruction has neither: it was never submitted, so it has no issue
+    # time, and recording one would make it look like a bid that made the gate.
+    stamped_utc = now_utc or datetime.now(UTC)
+    issued_utc = stamped_utc if kind == KIND_LIVE else None
+    on_time = stamped_utc < gate_utc if kind == KIND_LIVE else None
 
-    _save_forecast(result.forecast, result.step, settings)
+    _save_forecast(result.forecast, result.step, settings, kind=kind)
     step_minutes = int(
         RESOLUTION_STEP[settings.data.modeling_resolution] / pd.Timedelta(minutes=1)
     )
@@ -357,20 +452,25 @@ def run_day(
         target_day=target_day,
         model=result.forecast.model,
         step=result.step,
-        issued_utc=issued_utc,
+        # The plan's stamp is when the schedule was computed, which for a
+        # reconstruction is today; the run record's kind says which it is.
+        issued_utc=stamped_utc,
     )
     save_plan(plan, settings)
 
     written: list[str] = []
-    if refit is not None and refit.status in ("failed", "postponed"):
-        refit_incident = _refit_incident(target_day, refit, issued_utc)
+    # Incidents describe live operations. A reconstruction that had to step down
+    # a rung is reported by its record, not as something that went wrong on the
+    # desk: nothing happened on the desk that day.
+    if kind == KIND_LIVE and refit is not None and refit.status in FAILED_REFITS:
+        refit_incident = _refit_incident(target_day, refit, stamped_utc)
         upsert_incidents([refit_incident], default_path(settings))
         written.append(refit_incident.incident_id)
-    if result.degraded or not on_time:
+    if kind == KIND_LIVE and (result.degraded or not on_time):
         incident = _chain_incident(
-            target_day, result, readiness, issued_utc, on_time, settings
+            target_day, result, readiness, stamped_utc, bool(on_time), settings
         )
-        minutes = round((gate_utc - issued_utc).total_seconds() / 60, 2)
+        minutes = round((gate_utc - stamped_utc).total_seconds() / 60, 2)
         incident = incident.model_copy(
             update={"metrics": {"minutes_before_gate": minutes}}
         )
@@ -392,6 +492,7 @@ def run_day(
         planned_value_eur=plan.planned_value_eur,
         solve_seconds=plan.solve_seconds,
         incidents=tuple(written),
+        kind=kind,
     )
     payload = record.as_dict()
     payload["registry"] = registry_note or f"model version {version}"
@@ -445,6 +546,13 @@ def main(argv: list[str] | None = None) -> int:
         help="fit the production model instead of loading a registered one",
     )
     parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="reconstruct a past delivery day the desk never bid on, from the "
+        "data that was available before its gate; the record is marked as a "
+        "reconstruction and never counts as a bid",
+    )
+    parser.add_argument(
         "--replace",
         action="store_true",
         help="replace a schedule already committed for that day; a real bid is "
@@ -456,16 +564,33 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings(args.config)
     if args.check_deadline:
         on_time = check_deadline(settings, args.day)
-        state = "before the gate" if on_time else "after the gate, incident written"
-        print(f"{args.day}: schedule committed {state}")
+        if on_time is None:
+            print(
+                f"{args.day}: reconstructed after the fact, never submitted to "
+                "the auction, so no gate applied"
+            )
+        else:
+            state = "before the gate" if on_time else "after the gate, incident written"
+            print(f"{args.day}: schedule committed {state}")
         return 0
     if args.settle:
+        if not plan_path(settings, args.day).exists():
+            # Not a failure. No schedule was committed for that day, so there is
+            # nothing to value; the gap scan records that the desk was dark.
+            print(
+                f"{args.day}: no schedule was committed, so there is nothing to settle"
+            )
+            return 0
         print(json.dumps(settle_day(settings, args.day), indent=2))
         return 0
 
     try:
         record = run_day(
-            settings, args.day, use_registry=not args.no_registry, replace=args.replace
+            settings,
+            args.day,
+            use_registry=not args.no_registry,
+            replace=args.replace,
+            kind=KIND_BACKFILL if args.backfill else KIND_LIVE,
         )
     except PlanExistsError as exc:
         # Not a failure: the day is already traded, so the DAG carries on to the
@@ -479,17 +604,20 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def check_deadline(settings: Settings, day: date) -> bool:
+def check_deadline(settings: Settings, day: date) -> bool | None:
     """True when the schedule for ``day`` was committed before the gate.
 
     Reads the run record the forecast wrote. A late run gets one critical
     incident, so a missed gate is reported in the health log rather than only in
-    the scheduler's history.
+    the scheduler's history. A reconstruction returns None: it was never
+    submitted, so there was no gate for it to make or miss.
     """
     path = record_path(settings, day)
     if not path.exists():
         raise FileNotFoundError(f"no run record for {day} at {path}")
     record = json.loads(path.read_text(encoding="utf-8"))
+    if str(record.get("kind", KIND_LIVE)) != KIND_LIVE:
+        return None
     if bool(record["on_time"]):
         return True
     deadline_missed(str(day), settings)
