@@ -1,0 +1,60 @@
+{
+  "target_day": "2026-09-20",
+  "kind": "backfill",
+  "issued_utc": null,
+  "gate_utc": "2026-09-19T10:00:00+00:00",
+  "on_time": null,
+  "minutes_before_gate": null,
+  "step": "production",
+  "model": "lightgbm_conformal",
+  "model_version": "1",
+  "readiness": {
+    "target_day": "2026-09-20",
+    "checked_utc": "2026-09-21T14:01:30+00:00",
+    "ready": true,
+    "missing": [],
+    "feeds": [
+      {
+        "name": "prices",
+        "ready": true,
+        "expected": 96,
+        "present": 96,
+        "detail": "prices for 2026-09-19: 96 of 96 periods"
+      },
+      {
+        "name": "load_forecast",
+        "ready": true,
+        "expected": 96,
+        "present": 96,
+        "detail": "load forecast for 2026-09-20: 96 of 96 periods"
+      },
+      {
+        "name": "weather",
+        "ready": true,
+        "expected": 96,
+        "present": 96,
+        "detail": "weather for 2026-09-20: 96 of 96 periods"
+      },
+      {
+        "name": "fuels",
+        "ready": true,
+        "expected": 1,
+        "present": 1,
+        "detail": "fuels: last settlement 2026-09-19, 1 days before delivery"
+      }
+    ]
+  },
+  "attempts": [
+    {
+      "step": "production",
+      "used": true,
+      "detail": "forecast issued",
+      "seconds": 0.151
+    }
+  ],
+  "planned_value_eur": 252.7,
+  "solve_seconds": 0.034,
+  "incidents": [],
+  "registry": "model version 1",
+  "refit": null
+}

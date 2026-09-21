@@ -1,0 +1,75 @@
+{
+  "target_day": "2026-09-18",
+  "issued_utc": "2026-09-17T09:34:14+00:00",
+  "gate_utc": "2026-09-17T10:00:00+00:00",
+  "on_time": true,
+  "minutes_before_gate": 25.76,
+  "step": "seasonal_naive",
+  "model": "seasonal_naive_previous_week",
+  "model_version": null,
+  "readiness": {
+    "target_day": "2026-09-18",
+    "checked_utc": "2026-09-17T09:34:14+00:00",
+    "ready": false,
+    "missing": [
+      "load_forecast",
+      "weather"
+    ],
+    "feeds": [
+      {
+        "name": "prices",
+        "ready": true,
+        "expected": 96,
+        "present": 96,
+        "detail": "prices for 2026-09-17: 96 of 96 periods"
+      },
+      {
+        "name": "load_forecast",
+        "ready": false,
+        "expected": 96,
+        "present": 0,
+        "detail": "load forecast for 2026-09-18: 0 of 96 periods, 96 missing"
+      },
+      {
+        "name": "weather",
+        "ready": false,
+        "expected": 96,
+        "present": 0,
+        "detail": "weather for 2026-09-18: 0 of 96 periods, 96 missing"
+      },
+      {
+        "name": "fuels",
+        "ready": true,
+        "expected": 1,
+        "present": 1,
+        "detail": "fuels: last settlement 2026-09-17, 1 days before delivery"
+      }
+    ]
+  },
+  "attempts": [
+    {
+      "step": "production",
+      "used": false,
+      "detail": "skipped, waiting on load_forecast, weather",
+      "seconds": 0.0
+    },
+    {
+      "step": "no_weather",
+      "used": false,
+      "detail": "skipped, waiting on load_forecast",
+      "seconds": 0.0
+    },
+    {
+      "step": "seasonal_naive",
+      "used": true,
+      "detail": "forecast issued",
+      "seconds": 0.015
+    }
+  ],
+  "planned_value_eur": 324.19,
+  "solve_seconds": 1.384,
+  "incidents": [
+    "eba8aab171f696bb"
+  ],
+  "registry": "model version 1"
+}
