@@ -135,12 +135,39 @@ flowchart LR
 - **The dashboard's Live tab shows the record as it grows:** each delivery day's
   bid time against the gate, which rung of the chain forecast it, the planned value
   against what settled, cycles, incidents, and the drift monitor's warm-up count.
+- **The desk runs on GitHub Actions, not on a laptop.** A scheduled workflow bids
+  every day at 07:30 UTC, which is 09:30 Berlin in summer, when the 12:00 gate falls
+  earliest in UTC, and a
+  second run is a free retry: the pipeline refuses a day that already has a committed
+  schedule, so the retry cannot bid twice. It shells into the same modules the Airflow
+  DAG does, with one difference: it does not export the dashboard, which is built on a
+  machine that holds the backtest artifacts. It needs no secrets (SMARD, Open-Meteo and
+  the fuel prices are all keyless), and opens an issue when it fails. The state the desk must remember, about
+  7 MB of run records, plans, settlements, saved forecasts, incidents and the model
+  registry, is checked out from a `live-state` branch before the run and committed
+  back after it, so the time each bid was made is in a commit rather than only in a
+  file. The market data is not carried: it is rebuilt from source on every run, and
+  only as far back as the run needs. A laptop pays for the years of history once and
+  keeps the cache; a runner holds none, so it would pay again on every run. The
+  window is computed from what the day actually reads: the drift monitor's lookback,
+  the furthest back any rung of the fallback chain reaches, the model's own feature
+  history, and on the one day in 28 that a refit falls due, the whole two-year
+  training window. An ordinary run downloads 86 days instead of eight years, and a
+  windowed download never shortens a dataset that is already longer.
+- **The model registry does not belong to the machine that wrote it.** MLflow records
+  absolute paths, so a store restored under another root would send it looking for
+  artifacts that are not there, and the chain would quietly fit a model of its own
+  and call it the production model. The registry is rewritten on the way out and the
+  way back in, which also keeps the home directory of whoever logged the model off a
+  public branch. A save reads the whole store for machine paths and refuses rather
+  than publishing one.
 - **A day the pipeline did not run is shown, not hidden.** It runs only while the
   machine hosting it is on, so a day it missed has no bid at all. Each of those days
   gets its own incident and its own row, and every figure that describes live trading
   is counted over the days the desk actually bid. A day the pipeline ran and failed
   on is not counted as an outage: that run writes its own incident, and the machine
-  was not the problem.
+  was not the problem. The scheduled runner above is what closes this gap; the
+  outages on record are from before it existed.
 - **A missed day can be reconstructed, and a reconstruction never passes for a bid.**
   The same chain can forecast a past day from the data that was available before its
   gate, to show what the model would have bid. It is refused if the registered model
@@ -260,6 +287,9 @@ make settle     # value a committed schedule once prices publish: make settle DA
 make drift      # drift monitor on the live record through a day: make drift DAY=2026-09-17
 make gaps       # record the delivery days the desk did not bid on: make gaps DAY=2026-09-21
 make backfill   # reconstruct a missed day, marked as a reconstruction: make backfill DAY=2026-09-19
+make history DAY=2026-09-23 # days of market history that run needs to download
+make state-restore STORE=.live-state # bring the desk's state into a fresh checkout
+make state-save STORE=.live-state    # carry it back out after a run
 make launchd-install # macOS: switch the daily DAG on, keep Airflow running from login and the Mac awake for the run
 make dashboard  # build the React app and serve it with the API at http://127.0.0.1:8000
 make test       # ruff, strict mypy, pytest

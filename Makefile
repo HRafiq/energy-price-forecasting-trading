@@ -14,7 +14,7 @@ AIRFLOW_ENV := AIRFLOW_HOME=$(CURDIR)/airflow_home \
 AIRFLOW := $(AIRFLOW_ENV) $(CURDIR)/.venv-airflow/bin/airflow
 SUITES := validation decision-value synthetic degradation attribution
 
-.PHONY: help setup data entsoe forecast backtest holdout report figures export api web dashboard health experiments mlflow airflow airflow-setup pipeline settle drift test launchd-install launchd-uninstall
+.PHONY: help setup data entsoe forecast backtest holdout report figures export api web dashboard health experiments mlflow airflow airflow-setup pipeline settle drift gaps backfill history state-restore state-save test launchd-install launchd-uninstall
 
 help:
 	@echo "setup     install dependencies with uv"
@@ -129,6 +129,17 @@ gaps:
 
 backfill:
 	$(UV) python -m src.pipeline.daily_run --day $(DAY) --backfill
+
+history:
+	$(UV) python -m src.pipeline.history --day $(DAY)
+
+STORE ?= .live-state
+
+state-restore:
+	$(UV) python -m src.pipeline.state restore --store $(STORE)
+
+state-save:
+	$(UV) python -m src.pipeline.state save --store $(STORE)
 
 test:
 	$(UV) ruff check .

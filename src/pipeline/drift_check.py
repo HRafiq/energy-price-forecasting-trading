@@ -31,7 +31,7 @@ import argparse
 import json
 import os
 from dataclasses import asdict
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +50,10 @@ from src.health.drift import (
 from src.health.incidents import default_path, load_incidents, replace_incidents
 
 __all__ = [
+    "LOOKBACK_DAYS",
     "PRODUCTION_STEP",
     "SOURCE",
+    "WINDOW_DAYS",
     "live_forecasts",
     "load_thresholds",
     "main",
@@ -60,6 +62,10 @@ __all__ = [
 ]
 
 SOURCE = "live_drift"
+#: How far back a scan reads saved live forecasts. The alert is a rolling
+#: ``WINDOW_DAYS`` window, so older days cannot change it; the margin leaves room
+#: for the days the window drops for a fallback rung or a reconstruction.
+LOOKBACK_DAYS = WINDOW_DAYS * 2
 PRODUCTION_STEP = "production"
 
 
@@ -89,19 +95,33 @@ def load_thresholds(settings: Settings) -> Thresholds:
 
 
 def live_forecasts(
-    settings: Settings, through: date, prices: pd.Series
+    settings: Settings,
+    through: date,
+    prices: pd.Series,
+    *,
+    since: date | None = None,
 ) -> tuple[pd.DataFrame, list[dict[str, str]]]:
     """Production-model live forecasts through ``through``, with realised prices.
+
+    ``since`` bounds how far back the scan reaches, and defaults to
+    :data:`LOOKBACK_DAYS` before ``through``. The alert is a rolling window of
+    ``WINDOW_DAYS``, so reaching further back adds nothing to it, and a run that
+    downloaded only the history it needs does not hold the realised prices of
+    days older than that. Without the bound those days are read, found to have
+    no prices, and reported as unpublished, which is both wrong and a list that
+    grows by one entry every day for ever.
 
     Returns the frame in the walk-forward format and the days left out, each with
     the reason.
     """
+    first = since or through - timedelta(days=LOOKBACK_DAYS)
+    first = max(first, settings.evaluation.live_from)
     folder = settings.data.processed_path / "forecasts" / "production"
     parts: list[pd.DataFrame] = []
     skipped: list[dict[str, str]] = []
     for path in sorted(folder.glob("*.parquet")) if folder.exists() else []:
         day = date.fromisoformat(path.stem)
-        if not settings.evaluation.live_from <= day <= through:
+        if not first <= day <= through:
             continue
         frame = pd.read_parquet(path)
         # A reconstruction was made after the day it forecasts, from a saved
