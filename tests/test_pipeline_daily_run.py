@@ -17,7 +17,7 @@ from src.forecasting.base import QuantileForecast, make_forecast
 from src.forecasting.information import InformationSet
 from src.health.incidents import default_path, load_incidents
 from src.pipeline import daily_run as dr
-from src.pipeline.model_source import RefitOutcome
+from src.pipeline.model_source import ModelSourceError, RefitOutcome
 from src.pipeline.plan import load_plan, plan_path
 from tests.fakes import synthetic_market
 
@@ -549,3 +549,71 @@ def test_settling_a_day_that_was_never_traded_is_not_a_failure(
 
     assert dr.main(["--day", str(LIVE_DAY), "--settle"]) == 0
     assert "nothing to settle" in capsys.readouterr().out
+
+
+def test_a_registered_model_that_will_not_load_is_an_incident(
+    settings: Settings,
+    tmp_path: Path,
+    market: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The desk still bids, but not with the model the record names.
+
+    This is the failure a scheduled runner makes likely: the registry records
+    absolute paths, so a store restored elsewhere loads its records and not its
+    artifacts. Without this the run says step production, degraded false, and
+    nobody learns that the schedule came from a model fitted on the spot.
+    """
+    local = _local(settings, tmp_path)
+
+    def _unloadable(s: Settings, **kwargs: object) -> tuple[object, str]:
+        raise ModelSourceError("artifacts are not where the registry records them")
+
+    monkeypatch.setattr(dr, "load_model", _unloadable)
+    monkeypatch.setattr(dr, "served_version", lambda s, **k: ("4", LIVE_DAY))
+
+    record = dr.run_day(
+        local,
+        LIVE_DAY,
+        frame=market,
+        use_registry=True,
+        now_utc=datetime(2026, 9, 16, 9, 40, tzinfo=UTC),
+    )
+
+    # A schedule was still committed and went out on time; it simply did not
+    # come from the served version, which is what the incident is for.
+    assert record.on_time and record.model_version is None
+    assert load_plan(local, LIVE_DAY).target_day == LIVE_DAY
+    incidents = load_incidents(default_path(local))
+    swap = next(i for i in incidents if "could not be loaded" in i.detail)
+    assert swap.severity == "critical" and swap.status == "review"
+    assert "Version 4" in swap.detail and swap.incident_id in record.incidents
+
+
+def test_nothing_registered_at_all_is_not_an_incident(
+    settings: Settings,
+    tmp_path: Path,
+    market: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A project with an empty registry is meant to fit on the spot."""
+    local = _local(settings, tmp_path)
+
+    def _unloadable(s: Settings, **kwargs: object) -> tuple[object, str]:
+        raise ModelSourceError("nothing is registered")
+
+    monkeypatch.setattr(dr, "load_model", _unloadable)
+    monkeypatch.setattr(dr, "served_version", lambda s, **k: None)
+
+    dr.run_day(
+        local,
+        LIVE_DAY,
+        frame=market,
+        use_registry=True,
+        now_utc=datetime(2026, 9, 16, 9, 40, tzinfo=UTC),
+    )
+
+    # Other incidents may stand (the chain may still have stepped down); the
+    # one that must not exist is the claim that a served version was swapped out.
+    details = [i.detail for i in load_incidents(default_path(local))]
+    assert not any("could not be loaded" in detail for detail in details)

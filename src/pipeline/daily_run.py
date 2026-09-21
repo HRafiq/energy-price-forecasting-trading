@@ -224,6 +224,37 @@ def _scheduled_refit(
         )
 
 
+def _substitution_incident(
+    target_day: date, version: str, detail: str, detected_utc: datetime
+) -> Incident:
+    """A registered version exists but could not be loaded, so the chain fitted one.
+
+    Fitting on the spot is the designed behaviour when nothing is registered. It
+    is a fault when something is: the desk then bids with a model nobody chose,
+    on whatever history this run happens to hold, while the record says the
+    production model. That must not pass in silence.
+    """
+    return Incident(
+        incident_id=make_incident_id(SOURCE, "pipeline", target_day, "substitution"),
+        delivery_day=target_day,
+        detected_utc=detected_utc.replace(microsecond=0),
+        type="pipeline",
+        severity="critical",
+        detail=(
+            f"Version {version} is registered as the production model for "
+            f"{target_day} but could not be loaded, so the chain fitted a model of "
+            f"its own on this run's history and bid with that: {detail}"
+        ),
+        action=(
+            "The schedule was committed and is valid, but it did not come from the "
+            "served version; check that the registry's artifacts are where it "
+            "records them before the next run"
+        ),
+        status="review",
+        source=SOURCE,
+    )
+
+
 def _refit_incident(
     target_day: date, refit: RefitOutcome, issued_utc: datetime
 ) -> Incident:
@@ -397,6 +428,7 @@ def run_day(
 
     model: Forecaster | None = None
     version: str | None = None
+    substituted: tuple[str, date] | None = None
     registry_note = "registry not used"
     refit: RefitOutcome | None = None
     if use_registry:
@@ -405,6 +437,14 @@ def run_day(
         if kind == KIND_LIVE:
             refit = _scheduled_refit(settings, target_day, inputs, readiness)
         model, version, registry_note = _model_from_registry(settings)
+        if model is None:
+            # Nothing registered is ordinary; a registered version that will not
+            # load is not. served_version reads only the registry's records, so
+            # it answers even when the artifacts behind them cannot be reached.
+            try:
+                substituted = served_version(settings)
+            except Exception:  # an unreadable registry registers nothing
+                substituted = None
 
     try:
         result = run_chain(inputs, target_day, settings, readiness, model=model)
@@ -462,6 +502,12 @@ def run_day(
     # Incidents describe live operations. A reconstruction that had to step down
     # a rung is reported by its record, not as something that went wrong on the
     # desk: nothing happened on the desk that day.
+    if kind == KIND_LIVE and substituted is not None:
+        swap = _substitution_incident(
+            target_day, substituted[0], registry_note, stamped_utc
+        )
+        upsert_incidents([swap], default_path(settings))
+        written.append(swap.incident_id)
     if kind == KIND_LIVE and refit is not None and refit.status in FAILED_REFITS:
         refit_incident = _refit_incident(target_day, refit, stamped_utc)
         upsert_incidents([refit_incident], default_path(settings))
