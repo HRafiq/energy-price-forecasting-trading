@@ -372,7 +372,7 @@ Data: Bundesnetzagentur | SMARD.de, and weather data by Open-Meteo.com, both lic
 
 ## Background reading
 
-The reasoning and evidence behind each choice, written while building this: [the data guide](docs/data_guide.md), [the production notes](docs/production_notes.md) with a measured result for each failure mode, [the model comparison](notebooks/model_comparison.ipynb), [the backtest notebook](notebooks/backtest_report.ipynb), [the full results](docs/results/) and [the experiment plans](docs/plans/), each written before its run.
+The reasoning and evidence behind each choice, written while building this: [the data guide](docs/data_guide.md), [the production notes](docs/production_notes.md) with a measured result for each failure mode, [the model comparison](notebooks/model_comparison.ipynb), [the backtest notebook](notebooks/backtest_report.ipynb), [the full results](docs/results/) and [the experiment plans](docs/plans/), each written before its run, though only the bid-curves plan was committed on its own before its code, so it is the one whose ordering the commit history proves.
 
 ## About me
 
