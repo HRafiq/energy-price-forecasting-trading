@@ -136,10 +136,15 @@ flowchart LR
   bid time against the gate, which rung of the chain forecast it, the planned value
   against what settled, cycles, incidents, and the drift monitor's warm-up count.
 - **The desk runs on GitHub Actions, not on a laptop.** A scheduled workflow bids
-  every day at 07:30 UTC, which is 09:30 Berlin in summer, when the 12:00 gate falls
-  earliest in UTC, and a
-  second run is a free retry: the pipeline refuses a day that already has a committed
-  schedule, so the retry cannot bid twice. It shells into the same modules the Airflow
+  three times each morning, at 07:30, 08:15 and 09:00 UTC, the last of which is still
+  an hour before the 12:00 Berlin gate at its earliest in UTC. Three, because a
+  scheduled run is not a promise: GitHub delays them under load and drops them
+  outright, and this workflow's own first two never started. Nothing reports that
+  either, since the failure issue and the incident log both need a run to be running
+  before they can say anything, so repetition is the defence rather than an alarm.
+  The extra attempts are nearly free: the pipeline refuses a day that already has a
+  committed schedule, so whichever attempt arrives first is the bid and the rest exit
+  at the guard. It shells into the same modules the Airflow
   DAG does, with one difference: it does not export the dashboard, which is built on a
   machine that holds the backtest artifacts. It needs no secrets (SMARD, Open-Meteo and
   the fuel prices are all keyless), and opens an issue when it fails. The state the desk must remember, about

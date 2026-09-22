@@ -50,10 +50,19 @@ def test_every_run_has_time_to_bid_before_the_summer_gate() -> None:
         )
 
 
-def test_a_second_run_is_a_free_retry() -> None:
-    """A day with a committed schedule is refused, so the retry cannot rebid."""
-    assert len(TRIGGERS["schedule"]) == 2
+def test_more_than_one_scheduled_attempt_because_a_schedule_can_be_dropped() -> None:
+    """A run that never starts reports nothing: not an issue, not an incident.
+
+    GitHub delays and drops scheduled runs, and this workflow's own first two
+    were never started at all. Repetition is the only defence available from
+    inside the workflow, and it is safe because a day with a committed schedule
+    is refused, so the later attempts cannot bid twice.
+    """
+    crons = [entry["cron"] for entry in TRIGGERS["schedule"]]
+    assert len(crons) >= 3, "one dropped run should not cost the gate"
+    assert len(set(crons)) == len(crons), "attempts must be at different times"
     assert "workflow_dispatch" in TRIGGERS
+    # Serialised, not cancelled: a later attempt must not kill one mid-bid.
     assert PARSED["concurrency"]["cancel-in-progress"] is False
 
 
