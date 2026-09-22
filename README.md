@@ -154,6 +154,15 @@ flowchart LR
   history, and on the one day in 28 that a refit falls due, the whole two-year
   training window. An ordinary run downloads 86 days instead of eight years, and a
   windowed download never shortens a dataset that is already longer.
+- **The interpreter is pinned, because the model is a pickle.** The registered
+  model holds objects backed by native extensions, and unpickling one under a
+  different Python minor version does not raise: it segmentation faults, and a
+  process that dies at that level writes no incident and leaves nothing but an exit
+  code. The first scheduled run hit exactly that, on Python 3.12 against a model
+  registered under 3.11. `.python-version` now pins it and the workflow reads the
+  same file, and the loader refuses a model whose recorded Python differs from the
+  running one, before anything is unpickled, so the desk degrades and bids instead
+  of dying.
 - **A served model that cannot be loaded is an incident, not a substitution.**
   When nothing is registered the chain fits a model on the spot, which is the
   design. When a version *is* registered and will not load, the chain does the same

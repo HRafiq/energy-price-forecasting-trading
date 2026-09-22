@@ -291,8 +291,13 @@ def test_the_deadline_check_reports_only_a_late_run(
     assert [i.type for i in logged].count("pipeline") == 2
     assert sum("passed its deadline" in i.detail for i in logged) == 1
 
-    with pytest.raises(FileNotFoundError, match="no run record"):
-        dr.check_deadline(local, date(2026, 9, 20))
+    # A day with no run record at all: reported, not raised, so a failed bid
+    # reaches the health log instead of being buried under a second traceback.
+    assert dr.check_deadline(local, date(2026, 9, 20)) is False
+    assert any(
+        "No schedule was committed for 2026-09-20" in i.detail
+        for i in load_incidents(default_path(local))
+    )
 
 
 def test_nothing_is_defined_after_the_main_guard() -> None:
@@ -617,3 +622,18 @@ def test_nothing_registered_at_all_is_not_an_incident(
     # one that must not exist is the claim that a served version was swapped out.
     details = [i.detail for i in load_incidents(default_path(local))]
     assert not any("could not be loaded" in detail for detail in details)
+
+
+def test_a_missing_run_record_is_reported_not_raised(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """A bid that never happened must reach the health log, not a second traceback."""
+    local = _local(settings, tmp_path)
+
+    assert dr.check_deadline(local, LIVE_DAY) is False
+
+    incident = next(
+        i for i in load_incidents(default_path(local)) if "No schedule" in i.detail
+    )
+    assert incident.severity == "critical" and incident.status == "review"
+    assert str(LIVE_DAY) in incident.detail

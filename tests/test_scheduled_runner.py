@@ -216,3 +216,14 @@ def test_a_move_interrupted_partway_does_not_empty_the_target(
 
     kept = target / "data" / "processed" / "pipeline" / "old.json"
     assert kept.exists(), "the target was emptied before the copy finished"
+
+
+def test_the_runner_uses_the_interpreter_the_model_was_pickled_under() -> None:
+    """Across Python minor versions the load segfaults, which writes no incident."""
+    pinned = (REPO / ".python-version").read_text(encoding="utf-8").strip()
+    assert pinned, ".python-version must pin the interpreter"
+    uv = _step("Install uv")
+    assert uv["with"]["python-version-file"] == ".python-version"
+    requires = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    # The pin must be inside what the project allows, or uv resolves elsewhere.
+    assert f'>={pinned}' in requires
