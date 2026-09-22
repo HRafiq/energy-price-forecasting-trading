@@ -161,3 +161,48 @@ def test_readiness_and_chain_agree_on_a_real_frame(
     assert ready.ready
     assert [s.name for s in chain.steps_for(ready)] == [s.name for s in chain.STEPS]
     assert info.target_day == TARGET
+
+
+def test_a_rung_that_fails_unexpectedly_is_stepped_past_not_fatal(
+    settings: Settings, market: pd.DataFrame, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The desk must still bid when a rung breaks in a way nobody anticipated.
+
+    A model that will not deserialise, a missing solver binary, a library that
+    differs on the machine of the day: none of these raise ForecastError, and
+    before this they ended the run with no forecast, no incident and no record.
+    """
+
+    class Unpickleable:
+        """Stands in for a rung that breaks for a reason of its own."""
+
+        name = "unpickleable"
+        lookback_days = 10
+        fit_lookback_days = 10
+
+        def fit(self, info: InformationSet) -> None:
+            raise AttributeError("numpy.ndarray has no attribute _reconstruct")
+
+        def forecast(self, info: InformationSet) -> QuantileForecast:
+            raise AssertionError("never reached")
+
+    broken_rung = chain.STEPS[0]
+    monkeypatch.setattr(
+        chain,
+        "STEPS",
+        (
+            chain.ChainStep(
+                broken_rung.name,
+                broken_rung.label,
+                broken_rung.needs,
+                lambda s: Unpickleable(),
+            ),
+            *chain.STEPS[1:],
+        ),
+    )
+
+    result = chain.run_chain(market, TARGET, settings, _readiness())
+
+    assert result.step != "production" and result.degraded
+    broken = next(a for a in result.attempts if a.step == "production")
+    assert not broken.used and "AttributeError" in broken.detail
