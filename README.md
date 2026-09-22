@@ -17,7 +17,7 @@ A probabilistic price forecaster feeding a battery dispatch optimiser, backteste
 | Battery optimiser | Charge and discharge schedule for one delivery day | MILP in PuLP with CBC, wear cost, two-cycle cap |
 | Backtester | Walk-forward over two years, profit against perfect foresight, one frozen hold-out | Daily re-solve, Shapley attribution, block bootstrap |
 | Model health | Failure experiments measured in euros: a price regime shift, drift, a missing weather feed and the 12:00 deadline; an incident log | Walk-forward reruns, rolling alerts with thresholds fixed on validation, a fallback chain |
-| Live pipeline | A daily run that forecasts tomorrow, commits a schedule before the 12:00 gate and settles it the next day | Airflow DAG, readiness sensor with a deadline, fallback chain with a time limit on every step, MLflow model registry refit every 28 days, a daily drift check |
+| Live pipeline | A daily run that forecasts tomorrow, commits a schedule before the 12:00 gate and settles it the next day | GitHub Actions on a schedule, or the same steps as an Airflow DAG; readiness sensor with a deadline, fallback chain with a time limit on every step, MLflow model registry refit every 28 days, a daily drift check, state kept on its own branch |
 | Dashboard | Forecast fan, calibration, error by hour, the day's schedule, cumulative profit for any battery from 0.5 to 5 MW and 1 to 4 hours, a Model health tab, and a Live tab with every day the pipeline traded | React and FastAPI over exported backtest results; one day's schedule solved on request |
 | Desk briefing | Three to five sentences about the tab you are on, and three follow-up questions | A deterministic writer over that page's own numbers; a language model can be switched on, with every figure it writes checked against them before it is shown |
 
@@ -108,8 +108,9 @@ flowchart LR
   D --> E{wait for inputs<br/>deadline 11:30}
   E -->|feeds arrived| F[refit if due,<br/>forecast]
   E -->|timed out| G[forecast, degraded]
-  F --> H[export dashboard]
-  G --> H
+  F --> J[record days<br/>with no bid]
+  G --> J
+  J --> H[export dashboard]
   H --> L[check deadline]
   L --> I[settle yesterday]
   I --> K[check drift]
@@ -127,7 +128,9 @@ flowchart LR
   A refit waits for a day with every feed, and one that fails leaves the served
   version in place and writes an incident, so it never blocks the bid.
 - **A hung model cannot hold the gate.** Every fit and every rung of the chain has a
-  120-second limit against the 8 seconds a fit takes; a step still running is
+  120-second limit against the 8 seconds a fit takes on the laptop that registered
+  the model; a hosted runner is slower and the limit has not yet been measured
+  against one, because no refit has fallen due there. A step still running is
   abandoned and the chain moves on. The registry calls and file reads around them have
   no limit of their own, and only the forecast task's 15-minute timeout covers them.
 - **A live day cannot be settled when it is traded,** so the run commits a plan and a
@@ -181,13 +184,12 @@ flowchart LR
   way back in, which also keeps the home directory of whoever logged the model off a
   public branch. A save reads the whole store for machine paths and refuses rather
   than publishing one.
-- **A day the pipeline did not run is shown, not hidden.** It runs only while the
-  machine hosting it is on, so a day it missed has no bid at all. Each of those days
-  gets its own incident and its own row, and every figure that describes live trading
-  is counted over the days the desk actually bid. A day the pipeline ran and failed
-  on is not counted as an outage: that run writes its own incident, and the machine
-  was not the problem. The scheduled runner above is what closes this gap; the
-  outages on record are from before it existed.
+- **A day the pipeline did not run is shown, not hidden.** A day with no bid has no
+  bid whatever the reason, a laptop switched off or a scheduled run that never
+  started. Each of those days gets its own incident and its own row, and every figure
+  that describes live trading is counted over the days the desk actually bid. A day
+  the pipeline ran and failed on is not counted as an outage: that run writes its own
+  incident, and it was not the machine that was missing.
 - **A missed day can be reconstructed, and a reconstruction never passes for a bid.**
   The same chain can forecast a past day from the data that was available before its
   gate, to show what the model would have bid. It is refused if the registered model
@@ -222,7 +224,28 @@ the model that was already serving on those days: planned €330 and €253, wor
 and €84 at the published prices. Neither counts in the live totals, and the Live tab
 marks them "reconstructed"; the 21st, which has no forecast at all, is marked "desk
 offline". The run for 22 September went out at 11:53 Berlin, six minutes before the
-gate, on the production model with all four feeds complete.
+gate, on the production model with all four feeds complete, and settled at €870
+against a plan of €453.
+
+**What moving to a scheduler cost.** The desk moved to GitHub Actions on 21
+September. Its first run bid nothing, because the day already had a schedule and the
+pipeline refused to replace it: that proved the plumbing and, precisely because it
+stopped at the guard, proved nothing about loading the model. The first run that had
+to bid died with exit code 139, a segmentation fault rather than an error, because
+the model was pickled under Python 3.11 and the runner resolved 3.12. Nothing in the
+log said so beyond a warning MLflow printed while the load was already under way, and
+a process that dies at that level writes no incident: the run committed a settlement
+and a drift check, because those run whatever happened, and left no schedule, no run
+record and no forecast. The bid for 23 September was made from the laptop instead, at
+11:29 Berlin, half an hour before the gate.
+
+Neither scheduled attempt that morning started at all. Nothing reported that either,
+and nothing could: the failure issue and the incident log both need a run to be
+running before they can say anything, so a schedule that does not fire is silent by
+construction. The interpreter is now pinned, the loader refuses a model recorded
+against a different Python before it can be unpickled, and there are three scheduled
+attempts instead of one. What remains uncovered is a morning when all three are
+dropped, which only a watcher outside GitHub would catch.
 
 Run it without Airflow with `make pipeline DAY=2026-09-17`, or start the scheduler
 with `make airflow`.
@@ -240,6 +263,18 @@ with `make airflow`.
 - **Wear is a flat €8 per MWh discharged** with a two-cycle cap, not a cell-ageing model, and each day starts and ends half full.
 - **Outages sit outside the headline numbers (T4).** Settled at the German imbalance price, a random two-hour outage costs €44 on average, the worst window of a day €277.
 - **The hold-out is 105 summer days (T6)** and public data has gaps. Failure rates in the deadline simulation are assumptions, not measured outages.
+- **Measured feeds are read at their latest revised values.** SMARD revises actual
+  load and generation after publication, and every build downloads whatever is there
+  now rather than what stood on the day. The features that use them are lagged, so a
+  day's own values are never read, but a backtest and a reconstruction both see
+  figures slightly tidier than the desk had. Forecast feeds do not have this problem:
+  the weather comes from an archive of forecasts at a fixed lead, and prices are final
+  once the auction clears.
+- **A scheduled run is not guaranteed to start.** GitHub delays and drops scheduled
+  workflows, and a run that never begins writes no incident and opens no issue, so
+  nothing inside the system can report it. Three attempts a morning make one drop
+  survivable; a morning when all three are dropped would pass unnoticed until someone
+  looked.
 - **The live model refits on a fixed schedule only.** The drift monitor runs daily on the live record but only flags a retraining review, and it needs 28 production-model days before it can alert, so a sudden jump in price level waits for the next 28-day refit.
 - **The desk briefing is written by a template, not a model, by default (M5).** With a model switched on, every figure it writes must appear in the payload the page was built from, and prose that fails gets one rewrite before the template answers. What the check cannot tell is whether a figure is used in the right role: of 20 gpt-4o-mini briefings shown after it, 7 still misstated what a figure meant. A reflection layer with evals could close that gap; I left it out on purpose, because the template says less but everything it says is right.
 - Not a trading recommendation.
