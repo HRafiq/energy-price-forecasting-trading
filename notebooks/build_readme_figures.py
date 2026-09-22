@@ -247,11 +247,69 @@ def decision_value() -> None:
     plt.close(fig)
 
 
+def next_euro() -> None:
+    """What each lever is worth, all measured against the same ceiling.
+
+    The forecast and the asset are usually argued about separately, in different
+    units, so they never get compared. Both are put here as a share of the
+    perfect-foresight profit on the same 730 days, which is the only way to see
+    that one of them is an order of magnitude larger than the other.
+    """
+    processed = load_settings().data.processed_path
+    sweep = pd.read_csv(processed / "backtest" / "degradation" / "summary.csv")
+    true_wear = sweep["optimizer_wear_eur_per_mwh"] == sweep["true_wear_eur_per_mwh"]
+    capped = sweep["cycle_cap"] == 2.0
+    uncapped = sweep["cycle_cap"].isna()
+
+    def pnl(rows: pd.Series, strategy: str) -> float:
+        row = sweep[rows & (sweep["strategy"] == strategy)]
+        return float(row["pnl_true_wear_eur"].iloc[0])
+
+    ceiling = pnl(capped & true_wear, "perfect_foresight")
+    traded = pnl(capped & true_wear, "median_forecast")
+    no_cap_ceiling = pnl(uncapped & true_wear, "perfect_foresight")
+    free_wear = pnl(capped & (sweep["optimizer_wear_eur_per_mwh"] == 0.0),
+                    "median_forecast")
+
+    levers = [
+        ("A perfect forecast", (ceiling - traded) / ceiling, BLUE),
+        (
+            "Pricing wear correctly\n(already done)",
+            (traded - free_wear) / ceiling,
+            MUTED,
+        ),
+        ("Lifting the two-cycle cap", (no_cap_ceiling - ceiling) / ceiling, MUTED),
+    ]
+    fig, ax = plt.subplots(figsize=(7.6, 3.1))
+    names = [name for name, _, _ in levers]
+    values = [value * 100 for _, value, _ in levers]
+    ax.barh(names, values, color=[c for _, _, c in levers], height=0.52)
+    for y, value in enumerate(values):
+        ax.text(value + 0.18, y, f"{value:.1f}%", va="center", color=INK, fontsize=10)
+    ax.invert_yaxis()
+    ax.set_xlim(0, max(values) * 1.22)
+    ax.set_xlabel("Share of the perfect-foresight profit, 730 days")
+    ax.grid(axis="y", visible=False)
+    ax.tick_params(axis="y", length=0)
+    titled(
+        fig,
+        "Where the next euro is",
+        f"A 1 MW / 2 MWh battery on DE-LU day-ahead, June 2024 to May 2026. The "
+        f"forecast is worth an order of magnitude more than the asset: closing it "
+        f"entirely is worth EUR {ceiling - traded:,.0f} over the two years, lifting "
+        f"the warranty cap EUR {no_cap_ceiling - ceiling:,.0f}.",
+        0.72,
+    )
+    fig.savefig(OUT / "next_euro.png", dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     example_day()
     calibration()
     decision_value()
+    next_euro()
     print(f"wrote {', '.join(p.name for p in sorted(OUT.glob('*.png')))}")
     return 0
 
