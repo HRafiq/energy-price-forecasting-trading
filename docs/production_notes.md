@@ -231,7 +231,63 @@ into the evening peak lowers that peak.
 **Also left out:** grid fees and taxes, and the auction's volume increments.
 Orders are volumes without limit prices, so a forecast strategy can buy into a
 surprise spike; a desk would bid price-quantity curves. The P&L is trading margin
-net of wear.
+net of wear. The follow-up below tests that last point and rejects it.
+
+---
+
+## T5 · Bid curves from the quantile fan (validation: tested, rejected)
+
+**Question:** the note above names the price-taker assumption as a simplification
+and price-quantity curves as what a desk would bid instead. The forecast already
+carries the natural limits: its lower quantiles say what a bad price for a sale
+looks like, its upper quantiles what a bad price for a purchase looks like. Does
+bidding with limits from the fan earn more than bidding volumes?
+
+**Design, fixed before the run** (`docs/plans/bid_curves_plan.md`, committed before
+the code): the production schedule's volumes on the 730 validation days, bid three
+ways. `volumes` is the backtest as it stands, fixed volumes at the clearing price,
+and it must reproduce the saved validation profit to the cent. `limits_q25` puts a
+limit on every order from the fan, sales at q25 and purchases at q75; `limits_q10`
+uses q10 and q90. An order executes only if the realised price reaches its limit.
+The day is then replayed period by period through the store: a sale the store
+cannot cover is a delivery failure settled at the German imbalance price, as T4
+settles deviations, and the end-of-day state-of-charge gap is valued at the day's
+terminal prices. Criterion for each arm: adopt only if its paired daily profit
+difference against `volumes` has a 95% moving-block bootstrap interval (7-day
+blocks, 5,000 draws) entirely above zero.
+
+**Measured** (`docs/results/t5_bid_curves.md`):
+
+| arm | profit | capture | withheld sales | withheld purchases | undelivered | imbalance cash |
+|---|---|---|---|---|---|---|
+| volumes | €149,498 | 90.10% | 0 | 0 | 0.0 MWh | €0 |
+| limits_q25 | €92,818 | 55.94% | 2,841 | 4,137 | 702.3 MWh | -€44,271 |
+| limits_q10 | €119,158 | 71.82% | 1,332 | 1,864 | 386.7 MWh | -€29,563 |
+
+Against `volumes`, per day: `limits_q25` -€77.64 (-100.65 to -56.87), `limits_q10`
+-€41.56 (-60.29 to -25.77). Neither interval lies above zero, so neither is adopted.
+Both arms lose more on spike days (-€129.52 and -€76.76) than on other days, which is
+the opposite of what limits are meant to protect against.
+
+**Why, and this is the useful part:** with imbalance and the end-of-day gap left
+out, the difference is -€11.94 (-30.00 to +7.96) for `limits_q25` and -€1.15
+(-12.64 to +11.24) for `limits_q10`. Both intervals cross zero. The withheld orders
+themselves cost almost nothing; the entire loss is the consequence of withholding
+them. Buy and sell orders come in pairs. A purchase withheld at midday because the
+price ran above its limit is the energy an evening sale was counting on, and the
+battery then cannot deliver what it committed. Withholding the purchase saved a few
+euros; failing to deliver the sale cost tens of thousands.
+
+**Reading:** limits are not a free option here because the optimiser was never told
+about them. It plans a day whose sales depend on its purchases, and then the limits
+break that chain one order at a time. Bidding curves properly means planning for
+them, with linked or block orders or a stochastic plan over the fan, which is a
+different and larger piece of work than this experiment. What is rejected is the
+cheap version, and it is rejected for a reason that would apply to any strategy that
+withholds one leg of a paired trade.
+
+**Not tested:** linked orders, block orders, or an optimiser that plans against the
+limits it will bid.
 
 ---
 
