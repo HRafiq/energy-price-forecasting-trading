@@ -670,7 +670,26 @@ def check_deadline(settings: Settings, day: date) -> bool | None:
     """
     path = record_path(settings, day)
     if not path.exists():
-        raise FileNotFoundError(f"no run record for {day} at {path}")
+        # The run that should have written it did not get that far. The bid step
+        # has already failed loudly; raising again here only buries it under a
+        # second traceback. What is missing from the health log is the thing
+        # that matters, so write that and report the miss.
+        no_bid = Incident(
+            incident_id=make_incident_id(SOURCE, "pipeline", day, "no_schedule"),
+            delivery_day=day,
+            detected_utc=datetime.now(UTC).replace(microsecond=0),
+            type="pipeline",
+            severity="critical",
+            detail=(
+                f"No schedule was committed for {day} and no run record was "
+                "written: the run did not reach the point of committing a bid."
+            ),
+            action="Read the run that failed; the gate closed without a bid",
+            status="review",
+            source=SOURCE,
+        )
+        upsert_incidents([no_bid], default_path(settings))
+        return False
     record = json.loads(path.read_text(encoding="utf-8"))
     if str(record.get("kind", KIND_LIVE)) != KIND_LIVE:
         return None

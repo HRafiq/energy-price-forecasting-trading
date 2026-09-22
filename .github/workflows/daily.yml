@@ -69,6 +69,12 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          # The registered model is a pickle of objects backed by native
+          # extensions. Unpickling one under a different Python minor version
+          # segmentation faults rather than raising, so the interpreter is
+          # pinned to the one the model was registered under. .python-version
+          # holds the same value, so a laptop and a runner agree.
+          python-version-file: ".python-version"
 
       - name: Install the project
         run: uv sync --frozen

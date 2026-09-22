@@ -49,17 +49,21 @@ from __future__ import annotations
 
 import argparse
 import subprocess
+import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import mlflow
 import mlflow.pyfunc
 import numpy as np
 import pandas as pd
+import yaml
+from mlflow.entities.model_registry import ModelVersion
 from mlflow.exceptions import MlflowException
 from mlflow.pyfunc import PyFuncModel
 from mlflow.pyfunc.model import PythonModel
@@ -333,6 +337,46 @@ def _log_version(
     return version
 
 
+def _refuse_foreign_interpreter(registered: ModelVersion) -> None:
+    """Refuse a model pickled under a different Python than the one running.
+
+    The model is a pickle of objects backed by native extensions. Unpickling one
+    across Python minor versions does not raise: it segmentation faults, and a
+    process that dies at that level runs no handler, writes no incident and
+    leaves no trace but an exit code. MLflow notices and warns; a warning is not
+    enough, because by the time it is printed the load is already under way.
+
+    So the mismatch is read from the model's own metadata and refused before
+    anything is unpickled. Refusing is a ModelSourceError, which the chain steps
+    past and the run records as the served model not being the one used, so the
+    desk degrades and still bids instead of dying.
+    """
+    saved = str(getattr(registered, "source", "") or "")
+    info = Path(urlparse(saved).path if saved.startswith("file:") else saved)
+    descriptor = info / "MLmodel"
+    if not descriptor.exists():
+        return  # nothing to compare against; the load speaks for itself
+    try:
+        flavors = yaml.safe_load(descriptor.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return
+    pickled_under = (
+        flavors.get("flavors", {}).get("python_function", {}).get("python_version")
+    )
+    if not pickled_under:
+        return
+    theirs = ".".join(str(pickled_under).split(".")[:2])
+    ours = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if theirs != ours:
+        raise ModelSourceError(
+            f"{REGISTERED_NAME} version {registered.version} was pickled under "
+            f"Python {pickled_under} and this process is Python "
+            f"{sys.version.split()[0]}; loading it would risk a native crash "
+            "rather than an error. Pin the interpreter (.python-version) or "
+            "register a version under this one"
+        )
+
+
 def load_model(
     settings: Settings, *, alias: str = "production"
 ) -> tuple[Forecaster, str]:
@@ -341,6 +385,7 @@ def load_model(
     client = MlflowClient()
     try:
         registered = client.get_model_version_by_alias(REGISTERED_NAME, alias)
+        _refuse_foreign_interpreter(registered)
         loaded = mlflow.pyfunc.load_model(f"models:/{REGISTERED_NAME}@{alias}")
     except MlflowException as exc:
         raise ModelSourceError(
