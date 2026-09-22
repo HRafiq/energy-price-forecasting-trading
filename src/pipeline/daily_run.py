@@ -198,11 +198,21 @@ def _save_forecast(
 def _model_from_registry(
     settings: Settings,
 ) -> tuple[Forecaster | None, str | None, str]:
-    """The registered model, or nothing and the reason the chain must fit one."""
+    """The registered model, or nothing and the reason the chain must fit one.
+
+    Any failure counts, not only the ones the registry raises on purpose. A model
+    that will not deserialise on this machine fails in whatever way its libraries
+    choose, and letting that reach the caller would end the run before it has
+    forecast anything: no bid, no incident, nothing said. Returning nothing
+    instead sends the chain down a rung and, when a version was registered,
+    writes the incident that says the served model was not the one used.
+    """
     try:
         model, version = load_model(settings)
     except ModelSourceError as exc:
         return None, None, str(exc)
+    except Exception as exc:
+        return None, None, f"{type(exc).__name__}: {exc}"
     return model, version, ""
 
 

@@ -209,14 +209,22 @@ def run_chain(
 
         try:
             forecast = run_with_time_limit(attempt, limit, step.name)
-        except (ForecastError, ValueError) as exc:
+        except Exception as exc:
+            # Any failure at all, not only the ones a rung raises on purpose.
+            # The chain exists so that the desk still bids when something goes
+            # wrong, and it cannot know in advance what that something is: a
+            # model that will not deserialise, a solver binary missing, a
+            # library that behaves differently on the machine of the day. A rung
+            # that cannot forecast is a rung to step past, and the one that does
+            # forecast still makes the gate. The type is named in the attempt,
+            # and stepping down writes an incident, so nothing is swallowed.
+            named = (
+                f"failed: {exc}"
+                if isinstance(exc, ForecastError | ValueError)
+                else f"failed with {type(exc).__name__}: {exc}"
+            )
             attempts.append(
-                Attempt(
-                    step.name,
-                    False,
-                    f"failed: {exc}",
-                    time.perf_counter() - started,
-                )
+                Attempt(step.name, False, named, time.perf_counter() - started)
             )
             continue
         attempts.append(
