@@ -258,12 +258,12 @@ with `make airflow`.
 
 - Timing beat accuracy in my backtest: an evening forecast one hour early, with a €7/MWh average error, cost as much as random noise at €16/MWh. Turned around, a forecaster trained on the battery's profit instead of its error earned 1.4% more with the same accuracy.
 - Days with a negative price were 28% of my trading days but earned 37% of the battery's profit.
-- On my hold-out, forecasts too low between 18:00 and 21:00 caused 49% of the shortfall against perfect foresight. On validation, telling the model why evenings spike, and a good model of the chance of a spike, both left the evening loss where it was: the fix has to name the quarter-hour, not the evening.
+- On my hold-out, forecasts too low between 18:00 and 21:00 caused 49% of the shortfall against perfect foresight. On validation, telling the model why evenings spike, a model of the chance of a spike, selling that window at q75, and bidding price limits from the fan all left the evening loss where it was: the fix has to name the quarter-hour, not the evening.
 
 ## Limitations
 
 - **Day-ahead only:** no intraday re-trading and no balancing or reserve revenue. I looked into adding the intraday leg honestly and stopped: neither SMARD nor the ENTSO-E Transparency Platform publishes a free DE-LU intraday index at quarter-hour resolution. SMARD's wholesale category is day-ahead prices for each bidding zone, and ENTSO-E's A44 returns the two day-ahead auctions, SDAC and the EXAA 10:15 auction, whatever contract or auction parameters I asked for. Simulating intraday without those prices would have meant inventing them.
-- **Price taker (T5):** one 1 MW battery with fixed-volume orders filled at the clearing price; no fleet, grid or market-impact effects.
+- **Price taker (T5):** one 1 MW battery with fixed-volume orders filled at the clearing price; no fleet, grid or market-impact effects. Bidding price limits from the forecast's own quantiles instead was tested and rejected: withholding one leg of a paired trade starves the other, and the imbalance charges for undelivered energy (-€44,271 and -€29,563 across the two arms) dwarfed what the limits saved. With those consequences left out the difference is within noise, so it is the pairing that breaks it, not the limits.
 - **Wear is a flat €8 per MWh discharged** with a two-cycle cap, not a cell-ageing model, and each day starts and ends half full.
 - **Outages sit outside the headline numbers (T4).** Settled at the German imbalance price, a random two-hour outage costs €44 on average, the worst window of a day €277.
 - **The hold-out is 105 summer days (T6)** and public data has gaps. Failure rates in the deadline simulation are assumptions, not measured outages.
