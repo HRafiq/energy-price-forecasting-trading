@@ -248,12 +248,14 @@ def decision_value() -> None:
 
 
 def next_euro() -> None:
-    """What each lever is worth, all measured against the same ceiling.
+    """What each lever is worth to the battery that actually trades.
 
     The forecast and the asset are usually argued about separately, in different
-    units, so they never get compared. Both are put here as a share of the
-    perfect-foresight profit on the same 730 days, which is the only way to see
-    that one of them is an order of magnitude larger than the other.
+    units, so they never get compared. Every bar here is the same quantity: how
+    much more the median-forecast strategy would have earned over the same 730
+    days, as a share of the perfect-foresight ceiling. Measuring the cap against
+    the ceiling instead would answer a different question, what a trader with
+    perfect knowledge would gain from it, and would not belong on the same axis.
     """
     processed = load_settings().data.processed_path
     sweep = pd.read_csv(processed / "backtest" / "degradation" / "summary.csv")
@@ -267,7 +269,11 @@ def next_euro() -> None:
 
     ceiling = pnl(capped & true_wear, "perfect_foresight")
     traded = pnl(capped & true_wear, "median_forecast")
-    no_cap_ceiling = pnl(uncapped & true_wear, "perfect_foresight")
+    # Every bar is a gain to the strategy that actually trades, over the same
+    # ceiling. Taking the cap off the perfect-foresight run instead would raise
+    # the ceiling by 0.7%, which is a different question from what this desk
+    # would earn, and putting the two side by side would not be a comparison.
+    no_cap = pnl(uncapped & true_wear, "median_forecast")
     free_wear = pnl(capped & (sweep["optimizer_wear_eur_per_mwh"] == 0.0),
                     "median_forecast")
 
@@ -278,7 +284,7 @@ def next_euro() -> None:
             (traded - free_wear) / ceiling,
             MUTED,
         ),
-        ("Lifting the two-cycle cap", (no_cap_ceiling - ceiling) / ceiling, MUTED),
+        ("Lifting the two-cycle cap", (no_cap - traded) / ceiling, MUTED),
     ]
     fig, ax = plt.subplots(figsize=(7.6, 3.1))
     names = [name for name, _, _ in levers]
@@ -294,10 +300,11 @@ def next_euro() -> None:
     titled(
         fig,
         "Where the next euro is",
-        f"A 1 MW / 2 MWh battery on DE-LU day-ahead, June 2024 to May 2026. The "
-        f"forecast is worth an order of magnitude more than the asset: closing it "
-        f"entirely is worth EUR {ceiling - traded:,.0f} over the two years, lifting "
-        f"the warranty cap EUR {no_cap_ceiling - ceiling:,.0f}.",
+        f"A 1 MW / 2 MWh battery on DE-LU day-ahead, June 2024 to May 2026. Each "
+        f"bar is what this battery, trading on this forecast, would gain. The "
+        f"forecast is worth two orders of magnitude more than the warranty cap: "
+        f"EUR {ceiling - traded:,.0f} over the two years against EUR "
+        f"{no_cap - traded:,.0f}.",
         0.72,
     )
     fig.savefig(OUT / "next_euro.png", dpi=160, bbox_inches="tight")
