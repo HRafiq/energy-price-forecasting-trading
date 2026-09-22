@@ -2,7 +2,7 @@
 
 A probabilistic price forecaster feeding a battery dispatch optimiser, backtested on real German day-ahead market data. Built to answer one question: does a better price forecast actually make a battery more money?
 
-**The finding.** Trading a 1 MW / 2 MWh battery on two years of DE-LU day-ahead prices, my quantile forecast captured 90.1% of the perfect-foresight profit, €74,700 per MW per year, against 77.6% when the same optimiser traded on yesterday's prices. Better forecasts earned more, a rank correlation of -0.83 across eight forecasters, but timing mattered more than size: an evening shifted one hour early lost as much as random noise with twice the average error. What binds is the forecast, not the battery: forecast error cost 9.9% of the achievable profit, while lifting the two-cycle warranty cap would have added only 0.7%. For an operator, the next euro belongs in evening timing and drift monitoring: on an untouched summer hold-out, capture came in 3.4 points below the same months of validation because the forecast degraded.
+**The finding.** Trading a 1 MW / 2 MWh battery on two years of DE-LU day-ahead prices, my quantile forecast captured 90.1% of the perfect-foresight profit, €74,700 per MW per year, against 77.6% when the same optimiser traded on yesterday's prices. Better forecasts earned more, a rank correlation of -0.83 across eight forecasters, but timing mattered more than size: an evening shifted one hour early lost as much as random noise with twice the average error. What binds is the forecast, not the battery: measured the same way, as what this battery trading on this forecast would gain, closing the forecast gap is worth 9.9% of the achievable profit and lifting the two-cycle warranty cap 0.1%. For an operator, the next euro belongs in evening timing and drift monitoring: on an untouched summer hold-out, capture came in 3.4 points below the same months of validation because the forecast degraded.
 
 ![Battery trading dashboard on the last hold-out day](docs/img/dashboard.png)
 
@@ -39,7 +39,7 @@ Validation window, June 2024 to May 2026, 70,080 quarter-hours.
 
 ![Where the next euro is: a perfect forecast is worth 9.9% of the ceiling, lifting the cycle cap 0.7%](docs/img/next_euro.png)
 
-*Both levers measured against the same perfect-foresight ceiling on the same 730 days, which is the only way to compare them. Closing the forecast gap entirely is worth €16,424 over the two years; lifting the two-cycle warranty cap, €1,151.*
+*Every bar is the same quantity: what the median-forecast strategy would have gained over the same 730 days, as a share of the perfect-foresight ceiling. Closing the forecast gap is worth €16,424 over the two years; lifting the two-cycle warranty cap, €223. Measuring the cap against the ceiling instead answers a different question, what a trader with perfect knowledge would gain from it, and that figure is €1,151.*
 
 ![Reliability diagram of four forecasters](docs/img/calibration.png)
 

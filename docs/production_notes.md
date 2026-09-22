@@ -103,9 +103,12 @@ day D+1 close. A backtest using it looks better than any live system can be.
 
 **Found:**
 - SMARD's day-ahead wind and solar forecasts are submitted at 18:00 the day
-  before delivery, six hours after the gate. EU Regulation 543/2013, Article
-  14(1)(d), sets the same 18:00 deadline on ENTSO-E, so switching source does
-  not help.
+  before delivery, six hours after the gate. EU Regulation 543/2013 puts the
+  same deadline on every TSO: Article 14(1)(d) names the data item, a forecast
+  of wind and solar generation per bidding zone for each market time unit of the
+  following day, and Article 14(2)(d) sets it to be published no later than
+  18:00 Brussels time one day before delivery, so switching source does not
+  help. ENTSO-E's own duty to publish it follows from Article 3.
 - The day-ahead load forecast is due two hours before gate closure, Article
   6(1)(b), but may be updated afterwards. No vintage is published.
 - These forecasts track actuals closely: correlation 0.995 for solar and 0.987
