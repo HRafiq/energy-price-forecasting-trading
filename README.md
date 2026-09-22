@@ -37,6 +37,10 @@ Validation window, June 2024 to May 2026, 70,080 quarter-hours.
 | **LightGBM + conformal (production)** | **5.11** | **85.6%** | **16.03** |
 | LightGBM + conformal, hold-out June to September 2026 | 6.95 | 77.8% | 20.24 |
 
+![Where the next euro is: a perfect forecast is worth 9.9% of the ceiling, lifting the cycle cap 0.7%](docs/img/next_euro.png)
+
+*Both levers measured against the same perfect-foresight ceiling on the same 730 days, which is the only way to compare them. Closing the forecast gap entirely is worth €16,424 over the two years; lifting the two-cycle warranty cap, €1,151.*
+
 ![Reliability diagram of four forecasters](docs/img/calibration.png)
 
 The production model is close to calibrated with slightly narrow tails: its 90% range covered 85.6% of prices, against 73.3% for raw LightGBM quantile. It is weakest on extremes: pinball loss rises to 8.20 on days above €200/MWh, and its range did not reach the -€500/MWh floor on 1 May 2026.
