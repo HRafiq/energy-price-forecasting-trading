@@ -378,3 +378,5 @@ The reasoning and evidence behind each choice, written while building this: [the
 
 **Hasan Rafiq.** PhD in Electrical Engineering, 9+ years of applied machine learning in energy, with production experience in load and generation forecasting, battery dispatch optimisation, fault detection & diagnosis, and asset health monitoring. [LinkedIn](https://www.linkedin.com/in/rafiqh)
 
+Questions, corrections or things I have got wrong are welcome: [hassan.rafiq182@gmail.com](mailto:hassan.rafiq182@gmail.com)
+
