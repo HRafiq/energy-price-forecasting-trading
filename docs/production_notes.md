@@ -289,8 +289,103 @@ different and larger piece of work than this experiment. What is rejected is the
 cheap version, and it is rejected for a reason that would apply to any strategy that
 withholds one leg of a paired trade.
 
-**Not tested:** linked orders, block orders, or an optimiser that plans against the
-limits it will bid.
+**Not tested here:** linked orders and block orders. An optimiser that plans
+against its own uncertainty is the T7 note below.
+
+---
+
+## T7 · Dispatching on price paths instead of point forecasts (validation: tested, rejected)
+
+**Question:** the battery plans its day against one number per quarter-hour, the
+median. The forecast's ranges are calibrated one quarter-hour at a time, so
+ninety-six honest marginal distributions say nothing about how the periods move
+together, and what the battery trades is exactly that: whether 19:00 beats 18:00
+and by how much. The T1 mechanism run measured the cost of getting it wrong. The
+forecast put the evening window's peak in the right hour on 510 of 730 days
+against 478 for copying yesterday's peak hour, and the days an hour or more out
+carry 41.5% of the window's cost (29.2 to 55.1). When it was wrong it was early on
+112 days and late on 108, which is why selling the window at q75 failed: a bias
+correction cannot fix a variance problem. Does dispatching against a set of
+coherent whole-evening price paths earn more than dispatching against one?
+
+**The part worth keeping, before any result.** It cannot, under a risk-neutral
+objective, and this is provable rather than measured. The optimiser maximises
+
+    sum over t of dt * ((sell_t - wear) * discharge_t - buy_t * charge_t)
+
+which is linear in the prices for a fixed schedule, and every constraint it is
+subject to (power, capacity, state of charge, the cycle cap, ending where the day
+started) is price-independent. So for any schedule x and any price distribution P,
+`E[profit(x, P)] = profit(x, E[P])`, and the schedule maximising expected profit
+over a scenario set is the schedule at the scenario mean. Generating a thousand
+coherent paths and dispatching on their average cannot differ from dispatching on
+that average. Checked in code and not merely argued: the risk-neutral schedule
+over 200 paths and the schedule at their mean differ by 0.00 MW. Anyone holding a
+quantile forecast and a linear dispatch can stop here rather than build the
+machinery.
+
+That leaves risk-sensitive objectives as the only way a scenario set can act, so
+the question the experiment actually answers is whether it is worth giving up
+expected value to avoid being an hour wrong.
+
+**Design, fixed before the run** (`docs/plans/scenario_dispatch_plan.md`, committed
+on its own before the code, so the order is checkable): scenarios come from an
+empirical copula. For every past delivery day the realised price of each
+quarter-hour is located inside that day's own forecast quantiles, giving a rank
+per period: a vector of how that day landed within its forecast. A scenario for
+the target day is one such vector, drawn from days strictly before it, read back
+through the target day's quantiles. The marginals are the model's; the dependence
+across periods is one real day's. 200 scenarios a day, and because a Berlin day
+has 92, 96 or 100 quarter-hours a day only draws on days of its own shape. Arms:
+`median` is the production control, `mean` dispatches at the scenario mean,
+`cvar_25` and `cvar_50` maximise the mean blended with the average profit of the
+worst fifth of scenarios. Criterion: adopt only if the paired daily profit
+difference against `median` has a 95% moving-block bootstrap interval (7-day
+blocks, 5,000 draws) entirely above zero.
+
+**Tails, because the first run did not earn the word rejection.** 14.4% of
+validation periods land outside q05 to q95, and on the 7.3% above it the realised
+price averaged 138.7 EUR/MWh against a fan top of 116.9. Clamping those to the
+edge asks a hedge to insure a calmer world than the one that exists, which would
+have rejected the generator rather than the idea. Each tail now has an exponential
+shape whose scale is a multiple of the day's own spread, fitted on past days only
+and refitted as the pool moves: 0.58 below and 0.75 above. A 900 EUR/MWh price on a
+fan topping at 136 comes back as 519 rather than 136. Values far beyond that are
+still compressed by the rank clip.
+
+**Measured** (`docs/results/t7_scenario_dispatch.md`), 526 validation days,
+2024-12-19 to 2026-05-31:
+
+| arm | profit | what its own scenarios promised |
+|---|---|---|
+| median (control) | €106,662 | |
+| mean | €105,187 | €118,338 |
+| cvar_25 | €105,103 | €117,931 |
+| cvar_50 | €103,845 | €115,917 |
+
+Against the control, per day: `mean` -€2.80 (-4.97 to -0.97), `cvar_25` -€2.96
+(-4.42 to -1.60), `cvar_50` -€5.36 (-7.25 to -3.74). No interval lies above zero,
+so nothing is adopted. Every arm is worse with honest tails than it was with
+clamped ones.
+
+**Why, and this is the useful part:** the scenario set promised €118,338 and the
+days delivered €105,187, an optimism of €13,151 over 526 days against €3,179 when
+the tails were clamped. Imagining bigger spikes makes the battery trade harder to
+catch them, and they do not arrive where it imagined. More dispersion is not
+better-placed dispersion. The loss also sits almost entirely in the point estimate
+rather than the hedging: of `cvar_25`'s -€2.96 a day, the scenario mean carries
+-€2.80 and the CVaR term only -€0.16. Hedging is nearly free here; it is the
+scenario average that is a worse guide than the plain median.
+
+**Reading:** the ordering across periods, which was the thing marginals were
+missing, cannot be delivered through the dispatch, because a linear objective
+integrates it straight back out. What remains is the forecast's own numbers in the
+evening. That is a different problem from the one this experiment tested, and it
+is where the next attack belongs.
+
+**Not tested:** a non-linear objective arising from the market rather than from
+risk preference, such as recourse against an intraday leg, which would give
+scenarios something to act on that risk aversion does not.
 
 ---
 

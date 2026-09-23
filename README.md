@@ -258,7 +258,7 @@ with `make airflow`.
 
 - Timing beat accuracy in my backtest: an evening forecast one hour early, with a €7/MWh average error, cost as much as random noise at €16/MWh. Turned around, a forecaster trained on the battery's profit instead of its error earned 1.4% more with the same accuracy.
 - Days with a negative price were 28% of my trading days but earned 37% of the battery's profit.
-- On my hold-out, forecasts too low between 18:00 and 21:00 caused 49% of the shortfall against perfect foresight. On validation, telling the model why evenings spike, a model of the chance of a spike, selling that window at q75, and bidding price limits from the fan all left the evening loss where it was: the fix has to name the quarter-hour, not the evening.
+- On my hold-out, forecasts too low between 18:00 and 21:00 caused 49% of the shortfall against perfect foresight. On validation, telling the model why evenings spike, a model of the chance of a spike, selling that window at q75, bidding price limits from the fan, and dispatching against whole-evening price paths all left the evening loss where it was. The last of those settles something: with a profit linear in price, the expected value of a schedule over any set of paths is its value at their average, so the ordering across periods cannot reach the battery through the optimiser at all.
 
 ## Limitations
 
