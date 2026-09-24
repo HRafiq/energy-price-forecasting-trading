@@ -13,8 +13,11 @@
 # of waiting to be noticed.
 #
 # Timing. The gate closes at 12:00 Berlin, which is 10:00 UTC in summer and
-# 11:00 UTC in winter, so summer is the case to size for. The first attempt at
-# 07:30 UTC leaves 150 minutes; the last at 09:00 leaves 60.
+# 11:00 UTC in winter, so summer is the case to size for. GitHub does not fire
+# these when asked: measured delays on this repository ran from 4h 14m to 5h
+# 23m, which put every scheduled run hours past the gate. The crons are
+# therefore set early enough that even a five-hour delay lands inside it, and
+# the wait step below stops an early start from bidding before the feeds exist.
 #
 # There are three of them because a scheduled run is not a promise. GitHub
 # delays them under load and drops them outright, and the first windows after a
@@ -43,9 +46,9 @@ name: daily desk
 
 on:
   schedule:
-    - cron: "30 7 * * *"
-    - cron: "15 8 * * *"
-    - cron: "0 9 * * *"
+    - cron: "0 4 * * *"
+    - cron: "30 5 * * *"
+    - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
       day:
@@ -65,7 +68,7 @@ permissions:
 jobs:
   bid:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 360
     steps:
       - name: Check out the pipeline
         uses: actions/checkout@v4
@@ -76,6 +79,14 @@ jobs:
           ref: live-state
           path: .live-state
 
+      # setup-uv has no python-version-file input; passing one is accepted
+      # silently and does nothing, so the version is read here and handed over
+      # explicitly. .python-version stays the single source of truth, which uv
+      # also reads on a laptop.
+      - name: Read the pinned interpreter
+        id: python
+        run: echo "version=$(cat .python-version)" >> "$GITHUB_OUTPUT"
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -83,9 +94,8 @@ jobs:
           # The registered model is a pickle of objects backed by native
           # extensions. Unpickling one under a different Python minor version
           # segmentation faults rather than raising, so the interpreter is
-          # pinned to the one the model was registered under. .python-version
-          # holds the same value, so a laptop and a runner agree.
-          python-version-file: ".python-version"
+          # pinned to the one the model was registered under.
+          python-version: ${{ steps.python.outputs.version }}
 
       - name: Install the project
         run: uv sync --frozen
@@ -120,11 +130,36 @@ jobs:
           uv run python -m src.ingest.fuels
           uv run python -m src.ingest.build_inputs
 
-      - name: Check the feeds
-        # Reported, never fatal: the fallback chain exists for a missing feed,
-        # and a bid made on a lesser rung beats no bid at all.
-        continue-on-error: true
-        run: uv run python -m src.pipeline.readiness --day ${{ steps.day.outputs.delivery }}
+      - name: Wait for the feeds, until the cutoff
+        # The Airflow DAG polls a sensor until every feed has arrived or the
+        # deadline passes; without the same thing here a run that starts before
+        # the load forecast is published bids on a fallback rung for no reason.
+        # Each poke rebuilds, because a feed published since the last one is
+        # only visible after the dataset and inputs are rebuilt. The cutoff is
+        # 45 minutes before the summer gate at 10:00 UTC, which is the earlier
+        # of the two gates, so it holds all year. A run that starts after the
+        # cutoff, which is what a delayed schedule looks like, falls straight
+        # through and bids with whatever the chain can use.
+        run: |
+          cutoff="09:15"
+          while true; do
+            if uv run python -m src.pipeline.readiness \
+                 --day ${{ steps.day.outputs.delivery }}; then
+              echo "every feed has arrived"
+              break
+            fi
+            now=$(date -u +%H:%M)
+            if [[ "$now" > "$cutoff" ]]; then
+              echo "past $cutoff UTC: bidding on whatever the chain can use"
+              break
+            fi
+            echo "waiting five minutes, then rebuilding"
+            sleep 300
+            uv run python -m src.ingest.build_dataset \
+              --through ${{ steps.day.outputs.delivery }} \
+              --history-days ${{ steps.history.outputs.days }}
+            uv run python -m src.ingest.build_inputs
+          done
 
       - name: Bid
         run: uv run python -m src.pipeline.daily_run --day ${{ steps.day.outputs.delivery }}
