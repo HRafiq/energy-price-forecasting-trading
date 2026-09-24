@@ -143,15 +143,17 @@ flowchart LR
   bid time against the gate, which rung of the chain forecast it, the planned value
   against what settled, cycles, incidents, and the drift monitor's warm-up count.
 - **The desk runs on GitHub Actions, not on a laptop.** A scheduled workflow bids
-  three times each morning, at 07:30, 08:15 and 09:00 UTC, the last of which is still
-  an hour before the 12:00 Berlin gate at its earliest in UTC. Three, because a
-  scheduled run is not a promise: GitHub delays them under load and drops them
-  outright, and this workflow's own first two never started. Nothing reports that
-  either, since the failure issue and the incident log both need a run to be running
-  before they can say anything, so repetition is the defence rather than an alarm.
-  The extra attempts are nearly free: the pipeline refuses a day that already has a
-  committed schedule, so whichever attempt arrives first is the bid and the rest exit
-  at the guard. It shells into the same modules the Airflow
+  three times each morning, at 04:00, 05:30 and 07:00 UTC. That looks far too early
+  for a 12:00 Berlin gate, and it is deliberate: GitHub does not fire these when
+  asked. Measured on this repository, scheduled runs arrived between 4 hours 14
+  minutes and 5 hours 23 minutes late, which put every one of them past the gate.
+  Adding attempts does not fix that, because a delay shifts them all together, so
+  the first has to be early enough to land inside the gate on its own. An early start
+  would otherwise bid before the load forecast is published, so the run waits for the
+  feeds, rebuilding its inputs on each poke, until 09:15 UTC; past that it bids with
+  whatever the chain can use. The extra attempts are nearly free: the pipeline
+  refuses a day that already has a committed schedule, so whichever attempt arrives
+  first is the bid and the rest exit at the guard. It shells into the same modules the Airflow
   DAG does, with one difference: it does not export the dashboard, which is built on a
   machine that holds the backtest artifacts. It needs no secrets (SMARD, Open-Meteo and
   the fuel prices are all keyless), and opens an issue when it fails. The state the desk must remember, about

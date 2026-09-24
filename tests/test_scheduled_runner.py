@@ -31,23 +31,34 @@ def _step(name: str) -> dict[str, Any]:
 #: The 12:00 Berlin gate in UTC. Summer is the tight case: Berlin is UTC+2 then,
 #: so the gate falls an hour earlier in UTC than it does in winter.
 SUMMER_GATE_UTC_MINUTES = 10 * 60
-#: What a run needs: the download, the fit or the chain, and the solve, with room
-#: for the delay GitHub's scheduler adds under load.
-NEEDED_MINUTES = 60
+#: What a run needs before the gate. GitHub does not fire these on time: delays
+#: measured on this repository ran from 4h 14m to 5h 23m, so the crons are set
+#: early enough that even a long one lands inside the gate, and the wait step
+#: stops an early start from bidding before the feeds exist.
+NEEDED_MINUTES = 5 * 60
 
 
-def test_every_run_has_time_to_bid_before_the_summer_gate() -> None:
-    """The gate is 10:00 UTC in summer, not 11:00; a retry after it is useless."""
+def test_the_first_attempt_can_absorb_a_long_scheduler_delay() -> None:
+    """GitHub fires these hours late, and all the attempts shift together.
+
+    Measured on this repository: 4h 14m to 5h 23m. Adding attempts does not
+    help, because a delay moves every one of them by roughly the same amount,
+    so the earliest has to be early enough to land inside the gate on its own.
+    The later ones cover a delay that is short or absent.
+    """
     crons = [entry["cron"] for entry in TRIGGERS["schedule"]]
     assert crons, "no schedule"
+    starts = []
     for cron in crons:
         minute, hour, *rest = cron.split()
         assert rest == ["*", "*", "*"] and minute.isdigit() and hour.isdigit()
-        starts = int(hour) * 60 + int(minute)
-        slack = SUMMER_GATE_UTC_MINUTES - starts
-        assert slack >= NEEDED_MINUTES, (
-            f"cron {cron} leaves {slack} min before the summer gate"
-        )
+        starts.append(int(hour) * 60 + int(minute))
+    assert min(starts) <= SUMMER_GATE_UTC_MINUTES - NEEDED_MINUTES, (
+        f"the earliest attempt starts {SUMMER_GATE_UTC_MINUTES - min(starts)} min "
+        "before the summer gate, too late to absorb a five-hour delay"
+    )
+    for start in starts:
+        assert start < SUMMER_GATE_UTC_MINUTES, "an attempt starts after the gate"
 
 
 def test_more_than_one_scheduled_attempt_because_a_schedule_can_be_dropped() -> None:
@@ -94,9 +105,11 @@ def test_the_settled_day_is_the_day_before_the_delivery_day() -> None:
 
 
 def test_a_missing_feed_does_not_stop_the_bid() -> None:
-    """The fallback chain exists for this; a lesser rung beats no bid."""
-    assert _step("Check the feeds")["continue-on-error"] is True
+    """The chain exists for this; a lesser rung beats no bid, once waiting fails."""
     assert "continue-on-error" not in _step("Bid")
+    # The wait ends at its cutoff rather than failing the run, so a feed that
+    # never arrives still produces a committed schedule on a lower rung.
+    assert "break" in str(_step("Wait for the feeds")["run"])
 
 
 def test_the_state_is_saved_even_when_the_bid_failed() -> None:
@@ -228,11 +241,35 @@ def test_a_move_interrupted_partway_does_not_empty_the_target(
 
 
 def test_the_runner_uses_the_interpreter_the_model_was_pickled_under() -> None:
-    """Across Python minor versions the load segfaults, which writes no incident."""
+    """Across Python minor versions the load segfaults, which writes no incident.
+
+    setup-uv has no python-version-file input. Passing one is accepted with a
+    warning and then ignored, which is how this pin was silently doing nothing
+    while appearing to be set, so the version is read in a step and handed to
+    the action explicitly.
+    """
     pinned = (REPO / ".python-version").read_text(encoding="utf-8").strip()
     assert pinned, ".python-version must pin the interpreter"
     uv = _step("Install uv")
-    assert uv["with"]["python-version-file"] == ".python-version"
+    assert "python-version-file" not in uv["with"], "that input does not exist"
+    assert uv["with"]["python-version"] == "${{ steps.python.outputs.version }}"
+    reader = _step("Read the pinned interpreter")
+    assert ".python-version" in str(reader["run"])
     requires = (REPO / "pyproject.toml").read_text(encoding="utf-8")
     # The pin must be inside what the project allows, or uv resolves elsewhere.
-    assert f'>={pinned}' in requires
+    assert f">={pinned}" in requires
+
+
+def test_the_run_waits_for_the_feeds_instead_of_bidding_without_them() -> None:
+    """An early start must not cost a fallback bid, which is what it cost before."""
+    wait = _step("Wait for the feeds")
+    run = str(wait["run"])
+    assert "src.pipeline.readiness" in run
+    # Each poke rebuilds, or a feed published since the last one stays invisible.
+    assert "src.ingest.build_dataset" in run and "src.ingest.build_inputs" in run
+    # And it gives up in time to bid: the cutoff is before the earlier gate.
+    cutoff = re.search(r'cutoff="(\d\d):(\d\d)"', run)
+    assert cutoff, "the wait needs a cutoff"
+    minutes = int(cutoff.group(1)) * 60 + int(cutoff.group(2))
+    assert minutes < SUMMER_GATE_UTC_MINUTES, "the cutoff must precede the gate"
+    assert "continue-on-error" not in wait
