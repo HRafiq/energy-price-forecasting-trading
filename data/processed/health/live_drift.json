@@ -1,6 +1,6 @@
 {
-  "generated_utc": "2026-09-24T08:21:10+00:00",
-  "through": "2026-09-24",
+  "generated_utc": "2026-09-25T09:21:58+00:00",
+  "through": "2026-09-25",
   "model": "lightgbm_conformal",
   "window_days": 28,
   "thresholds": {
@@ -31,6 +31,10 @@
     {
       "day": "2026-09-20",
       "reason": "reconstructed, not a live bid"
+    },
+    {
+      "day": "2026-09-25",
+      "reason": "forecast by seasonal_naive"
     }
   ],
   "incidents": [],
