@@ -1,0 +1,194 @@
+"""What kind of day the forecast's edge lands on: the grouping and the verdicts."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from src.health.experiments import t9_forecast_edge as fe
+
+
+def _frame(values: Any, edge: Any) -> pd.DataFrame:
+    days = pd.date_range("2024-06-01", periods=len(values), freq="D").date
+    return pd.DataFrame(
+        {
+            "spread": np.asarray(values, dtype="float64"),
+            "edge_eur": np.asarray(edge, dtype="float64"),
+        },
+        index=pd.Index(days, name="target_day"),
+    )
+
+
+def test_quintiles_split_into_five_and_their_shares_sum_to_one() -> None:
+    frame = _frame(np.arange(100.0), np.arange(100.0))
+
+    table = fe.quintile_table(frame, "spread", "edge_eur")
+
+    assert [row["quintile"] for row in table] == ["Q1", "Q2", "Q3", "Q4", "Q5"]
+    assert sum(row["share_of_total"] for row in table) == pytest.approx(1.0)
+    assert all(row["days"] == 20 for row in table)
+    # The lowest fifth holds the lowest values, the highest fifth the highest.
+    assert table[0]["mean"] < table[-1]["mean"]
+
+
+def test_a_characteristic_with_many_ties_makes_fewer_groups_than_five() -> None:
+    """``peak_shift`` is mostly zero: forcing five equal bins is impossible."""
+    ties = np.concatenate([np.zeros(60), np.array([1.0, 2.0, 3.0, 4.0] * 10)])
+
+    table = fe.quintile_table(_frame(ties, np.arange(100.0)), "spread", "edge_eur")
+
+    assert 1 < len(table) < fe.QUINTILES
+    assert sum(row["share_of_total"] for row in table) == pytest.approx(1.0)
+
+
+def test_the_verdict_needs_the_intervals_to_clear_each_other() -> None:
+    def row(low: float, high: float) -> dict[str, Any]:
+        return {"low": low, "high": high, "mean": (low + high) / 2}
+
+    clear = [row(-1.0, 1.0), row(5.0, 9.0)]
+    overlapping = [row(-1.0, 6.0), row(5.0, 9.0)]
+
+    # direction +1: the edge should be larger at the top of the range.
+    assert fe._verdict(clear, +1) is True
+    assert fe._verdict(overlapping, +1) is False
+    # direction -1 reverses which end has to win, so the same table now fails.
+    assert fe._verdict(clear, -1) is False
+    assert fe._verdict(list(reversed(clear)), -1) is True
+
+
+def test_a_day_that_keeps_its_seasonal_ranking_scores_one() -> None:
+    shape = np.arange(24.0) * 10.0
+
+    kept = fe.characterise(shape.copy(), shape, hours=1.0, threshold=200.0)
+
+    assert kept["shape_agreement"] == pytest.approx(1.0)
+    assert kept["spread"] == pytest.approx(230.0)
+    assert kept["peak_shift"] == pytest.approx(0.0)
+    assert kept["spike"] is True
+
+
+def test_a_day_that_reverses_its_seasonal_ranking_scores_minus_one() -> None:
+    shape = np.arange(24.0) * 10.0
+
+    broken = fe.characterise(shape[::-1].copy(), shape, hours=1.0, threshold=200.0)
+
+    assert broken["shape_agreement"] == pytest.approx(-1.0)
+    # The peak moved from the last hour to the first: 23 hours away.
+    assert broken["peak_shift"] == pytest.approx(23.0)
+
+
+def test_the_spike_flag_follows_the_day_maximum_not_its_mean() -> None:
+    quiet = np.full(24, 199.0)
+    one_spike = np.concatenate([np.zeros(23), [200.0]])
+
+    assert fe.characterise(quiet, quiet, 1.0, 200.0)["spike"] is False
+    assert fe.characterise(one_spike, quiet, 1.0, 200.0)["spike"] is True
+
+
+def test_quarter_hour_days_measure_the_peak_shift_in_hours() -> None:
+    shape = np.zeros(96)
+    shape[40] = 100.0
+    realised = np.zeros(96)
+    realised[48] = 100.0  # two hours later
+
+    moved = fe.characterise(realised, shape, hours=0.25, threshold=200.0)
+
+    assert moved["peak_shift"] == pytest.approx(2.0)
+
+
+def test_the_edge_and_its_normalised_form_come_from_the_saved_profits() -> None:
+    day = pd.Timestamp("2024-06-01").date()
+    daily = pd.DataFrame(
+        {
+            "median_forecast": [100.0],
+            "fixed_shape_seasonal": [60.0],
+            "perfect_foresight": [200.0],
+        },
+        index=pd.Index([day], name="target_day"),
+    )
+    described = pd.DataFrame(
+        {
+            "shape_agreement": [0.5],
+            "spread": [30.0],
+            "peak_shift": [1.0],
+            "spike": [False],
+        },
+        index=pd.Index([day], name="target_day"),
+    )
+
+    joined = daily.join(described, how="inner")
+    joined["edge_eur"] = joined["median_forecast"] - joined[fe.FIXED]
+    joined["edge_share"] = joined["edge_eur"] / joined["perfect_foresight"]
+
+    assert joined["edge_eur"].iloc[0] == pytest.approx(40.0)
+    assert joined["edge_share"].iloc[0] == pytest.approx(0.2)
+
+
+def test_the_page_states_each_verdict_from_the_intervals() -> None:
+    """P1 is built to hold and P2 to fail, so the page must tell them apart."""
+
+    def table(holds: bool, direction: int) -> list[dict[str, Any]]:
+        ends = [(-1.0, 1.0), (5.0, 9.0)] if holds else [(-1.0, 6.0), (5.0, 9.0)]
+        if direction < 0:
+            ends.reverse()
+        return [
+            {
+                "quintile": f"Q{i + 1}",
+                "low": low,
+                "high": high,
+                "mean": (low + high) / 2,
+                "low_edge": 0.0,
+                "high_edge": 1.0,
+                "share_of_total": 0.5,
+                "days": 365,
+                "total": 0.0,
+            }
+            for i, (low, high) in enumerate(ends)
+        ]
+
+    holding = {"shape_agreement": True, "spread": False, "peak_shift": False}
+    summary: dict[str, Any] = {
+        "days": 730,
+        "first_day": "2024-06-01",
+        "last_day": "2026-05-31",
+        "fixed_arm": fe.FIXED,
+        "spike_threshold_eur_mwh": 200.0,
+        "total_edge_eur": 8575.65,
+        "mean_edge_eur": 11.75,
+        "correlations": dict.fromkeys(fe.CHARACTERISTICS, -0.21),
+        "quintiles": {
+            value: {
+                name: table(holding[name], direction)
+                for name, direction in fe.CHARACTERISTICS.items()
+            }
+            for value in ("edge_eur", "edge_share")
+        },
+        "spike": {
+            value: {
+                "spike_days": {"mean": 1.0, "low": 0.0, "high": 2.0, "days": 143},
+                "other_days": {"mean": 1.0, "low": 0.0, "high": 2.0, "days": 587},
+                "count": 143,
+            }
+            for value in ("edge_eur", "edge_share")
+        },
+    }
+    summary["verdicts"] = {
+        name: {
+            v: fe._verdict(summary["quintiles"][v][name], d)
+            for v in ("edge_eur", "edge_share")
+        }
+        for name, d in fe.CHARACTERISTICS.items()
+    }
+    summary["verdicts"]["spike"] = dict.fromkeys(("edge_eur", "edge_share"), False)
+
+    page = fe.results_markdown(summary)
+
+    # Only P1 was built to hold, in both columns; everything else must read fails.
+    assert page.count("HOLDS") == 2
+    p1 = next(line for line in page.splitlines() if "**P1**" in line)
+    p2 = next(line for line in page.splitlines() if "**P2**" in line)
+    assert p1.endswith("| HOLDS | HOLDS |") and p2.endswith("| fails | fails |")
+    assert "143 of 730 days" in page
