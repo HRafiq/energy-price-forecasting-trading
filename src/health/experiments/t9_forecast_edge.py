@@ -45,6 +45,7 @@ from src.trading.strategies import MEDIAN_FORECAST
 
 __all__ = [
     "CHARACTERISTICS",
+    "capture_by_agreement",
     "characterise",
     "describe_days",
     "quintile_table",
@@ -202,6 +203,7 @@ def run(settings: Settings) -> dict[str, Any]:
             for value in values
         },
     }
+    summary["capture_by_agreement"] = capture_by_agreement(frame)
     summary["verdicts"] = {
         name: {
             value: _verdict(summary["quintiles"][value][name], direction)
@@ -217,6 +219,36 @@ def run(settings: Settings) -> dict[str, Any]:
         for value in values
     }
     return summary | {"daily": frame}
+
+
+def capture_by_agreement(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    """Each arm's capture of the day's own ceiling, by quintile of agreement.
+
+    Not pre-registered: added after the run, because P1 on its own is partly
+    mechanical. That the fixed rule does worse on days which departed from the
+    fixed shape is close to definitional. What is not definitional is how the
+    *forecast* behaves on those days, and the answer changes the reading: it
+    degrades too, only more slowly. The edge is resilience, not brilliance.
+    """
+    labels = _groups(frame, "shape_agreement")
+    rows: list[dict[str, Any]] = []
+    for label in labels.cat.categories:
+        part = frame[labels == label]
+        ceiling = float(part["perfect_foresight"].sum())
+        forecast = float(part[MEDIAN_FORECAST.name].sum()) / ceiling
+        fixed = float(part[FIXED].sum()) / ceiling
+        rows.append(
+            {
+                "quintile": str(label),
+                "days": len(part),
+                "low_agreement": float(part["shape_agreement"].min()),
+                "high_agreement": float(part["shape_agreement"].max()),
+                "forecast_capture": forecast,
+                "fixed_capture": fixed,
+                "gap": forecast - fixed,
+            }
+        )
+    return rows
 
 
 def _cell(item: dict[str, Any], places: int = 2) -> str:
@@ -284,6 +316,25 @@ def results_markdown(summary: dict[str, Any]) -> str:
                 f"{row['high_edge']:.2f} | {_cell(row)} | "
                 f"{row['share_of_total']:.1%} | {_cell(share, 4)} |"
             )
+    lines += [
+        "",
+        "## Why P1 holds: both arms degrade, one twice as fast",
+        "",
+        "Added after the run, not pre-registered. P1 on its own is partly "
+        "mechanical, because a day that departed from the fixed shape is by "
+        "construction a day the fixed rule had trouble with. What is not "
+        "mechanical is what the forecast does on those same days.",
+        "",
+        "| quintile | agreement | days | forecast capture | fixed capture | gap |",
+        "|---|---|---|---|---|---|",
+    ]
+    for row in summary["capture_by_agreement"]:
+        lines.append(
+            f"| {row['quintile']} | {row['low_agreement']:.2f} to "
+            f"{row['high_agreement']:.2f} | {row['days']} | "
+            f"{row['forecast_capture']:.1%} | {row['fixed_capture']:.1%} | "
+            f"{row['gap'] * 100:+.1f} pts |"
+        )
     spike = summary["spike"]
     lines += [
         "",

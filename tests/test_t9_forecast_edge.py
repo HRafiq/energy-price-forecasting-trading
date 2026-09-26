@@ -183,6 +183,26 @@ def test_the_page_states_each_verdict_from_the_intervals() -> None:
         for name, d in fe.CHARACTERISTICS.items()
     }
     summary["verdicts"]["spike"] = dict.fromkeys(("edge_eur", "edge_share"), False)
+    summary["capture_by_agreement"] = [
+        {
+            "quintile": "Q1",
+            "days": 146,
+            "low_agreement": -0.39,
+            "high_agreement": 0.74,
+            "forecast_capture": 0.808,
+            "fixed_capture": 0.673,
+            "gap": 0.135,
+        },
+        {
+            "quintile": "Q5",
+            "days": 146,
+            "low_agreement": 0.95,
+            "high_agreement": 0.99,
+            "forecast_capture": 0.929,
+            "fixed_capture": 0.932,
+            "gap": -0.003,
+        },
+    ]
 
     page = fe.results_markdown(summary)
 
@@ -192,3 +212,29 @@ def test_the_page_states_each_verdict_from_the_intervals() -> None:
     p2 = next(line for line in page.splitlines() if "**P2**" in line)
     assert p1.endswith("| HOLDS | HOLDS |") and p2.endswith("| fails | fails |")
     assert "143 of 730 days" in page
+    # The post-hoc table reports the gap in percentage points, not fractions.
+    assert "+13.5 pts" in page and "-0.3 pts" in page
+    assert "not pre-registered" in page
+
+
+def test_capture_by_agreement_divides_each_arm_by_the_days_own_ceiling() -> None:
+    days = pd.date_range("2024-06-01", periods=10, freq="D").date
+    frame = pd.DataFrame(
+        {
+            "shape_agreement": np.linspace(0.0, 1.0, 10),
+            "median_forecast": np.full(10, 90.0),
+            fe.FIXED: np.concatenate([np.full(5, 50.0), np.full(5, 95.0)]),
+            "perfect_foresight": np.full(10, 100.0),
+        },
+        index=pd.Index(days, name="target_day"),
+    )
+
+    rows = fe.capture_by_agreement(frame)
+
+    assert [row["days"] for row in rows] == [2, 2, 2, 2, 2]
+    # The arms are built so the fixed rule is behind on the days that broke
+    # pattern and ahead on the ordinary ones, which is the real finding's shape.
+    assert rows[0]["forecast_capture"] == pytest.approx(0.9)
+    assert rows[0]["fixed_capture"] == pytest.approx(0.5)
+    assert rows[0]["gap"] == pytest.approx(0.4)
+    assert rows[-1]["gap"] == pytest.approx(-0.05)

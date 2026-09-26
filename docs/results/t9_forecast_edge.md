@@ -44,6 +44,18 @@ Spearman correlation of each characteristic with the daily edge in euros: `shape
 | Q3 | 1.50 to 7.00 | +20.42 (+8.24 to +30.53) | 8.8% | +0.1445 (+0.0195 to +0.2539) |
 | Q4 | 7.25 to 20.50 | +9.67 (+5.60 to +13.81) | 16.3% | +0.0682 (+0.0375 to +0.1005) |
 
+## Why P1 holds: both arms degrade, one twice as fast
+
+Added after the run, not pre-registered. P1 on its own is partly mechanical, because a day that departed from the fixed shape is by construction a day the fixed rule had trouble with. What is not mechanical is what the forecast does on those same days.
+
+| quintile | agreement | days | forecast capture | fixed capture | gap |
+|---|---|---|---|---|---|
+| Q1 | -0.39 to 0.74 | 146 | 80.8% | 67.3% | +13.5 pts |
+| Q2 | 0.74 to 0.84 | 147 | 86.3% | 76.8% | +9.5 pts |
+| Q3 | 0.84 to 0.90 | 145 | 91.6% | 84.8% | +6.7 pts |
+| Q4 | 0.90 to 0.95 | 146 | 93.1% | 90.8% | +2.4 pts |
+| Q5 | 0.95 to 0.99 | 146 | 92.9% | 93.2% | -0.3 pts |
+
 ## P3: spike days, a maximum at or above €200/MWh
 
 143 of 730 days.
