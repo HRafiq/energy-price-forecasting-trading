@@ -2,7 +2,7 @@
 
 A probabilistic price forecaster feeding a battery dispatch optimiser, backtested on real German day-ahead market data. Built to answer one question: does a better price forecast actually make a battery more money?
 
-**The finding.** Trading a 1 MW / 2 MWh battery on two years of DE-LU day-ahead prices, my quantile forecast captured 90.1% of the perfect-foresight profit, €74,700 per MW per year, against 77.6% when the same optimiser traded on yesterday's prices. Better forecasts earned more, a rank correlation of -0.83 across eight forecasters, but timing mattered more than size: an evening shifted one hour early lost as much as random noise with twice the average error. What binds is the forecast, not the battery: measured the same way, as what this battery trading on this forecast would gain, closing the forecast gap is worth 9.9% of the achievable profit and lifting the two-cycle warranty cap 0.1%. For an operator, the next euro belongs in evening timing and drift monitoring: on an untouched summer hold-out, capture came in 3.4 points below the same months of validation because the forecast degraded.
+**The finding.** Trading a 1 MW / 2 MWh battery on two years of DE-LU day-ahead prices, my quantile forecast captured 90.1% of the perfect-foresight profit, €74,700 per MW per year. The honest comparison is not the 77.6% the same optimiser reaches on yesterday's prices, because that is still a forecast, but a rule that forecasts nothing at all: dispatching on the average price of each time of day in that calendar month captures 84.9%. The forecast is worth the 5.2 points between them, about €4,300 per MW per year, and it earns almost all of that on the one day in five that departs from its seasonal pattern; on the most ordinary fifth of days it is worth nothing measurable. Better forecasts earned more, a rank correlation of -0.83 across eight forecasters, but timing mattered more than size: an evening shifted one hour early lost as much as random noise with twice the average error. What binds is the forecast, not the battery: measured the same way, as what this battery trading on this forecast would gain, closing the forecast gap is worth 9.9% of the achievable profit and lifting the two-cycle warranty cap 0.1%. For an operator, the next euro belongs in evening timing and drift monitoring: on an untouched summer hold-out, capture came in 3.4 points below the same months of validation because the forecast degraded.
 
 ![Battery trading dashboard on the last hold-out day](docs/img/dashboard.png)
 
@@ -60,6 +60,10 @@ The production model is close to calibrated with slightly narrow tails: its 90% 
 | Mean-forecast dispatch | 74,762 | 90.1% | 1.76 | 24 | 90.7% |
 | Quantile-aware dispatch, q25 | 70,752 | 85.3% | 1.25 | 26 | 88.8% |
 | Median dispatch on a naive forecast (yesterday's prices) | 64,418 | 77.6% | 1.73 | 174 | 84.0% |
+| **Fixed shape, same calendar month (no forecast at all)** | **70,461** | **84.9%** | 1.76 | 37 | not scored |
+| Fixed shape, every trailing day (no forecast at all) | 56,987 | 68.7% | 1.90 | 821 | not scored |
+
+The two fixed-shape rows are not scored on the hold-out: it was scored once, before these arms existed, and reusing it would spend the one clean test this project has.
 
 ![Forecast fan and battery schedule for one backtest day](docs/img/example_day.png)
 
@@ -77,11 +81,48 @@ Where the money is lost: about 40% of the gap to perfect foresight falls between
 
 ![Forecast accuracy against captured profit for eight forecasters](docs/img/decision_value.png)
 
-Better pinball loss mostly means more profit: capture rises from 77.6% for a naive forecast to 90.9% for QRA. Among the four most accurate models, capture differs by only 2.1 points and does not follow the accuracy order. Synthetic forecasts show why: with the same €16/MWh average error, a level shift lost €44 over two years and random noise €24,800, while pulling the evening one hour early lost €24,800 with an error of only €7/MWh.
+Better pinball loss mostly means more profit: capture rises from 77.6% for a naive forecast to 90.9% for QRA. Every forecaster on that chart sits above a rule that forecasts nothing, at 84.9%, which compresses the whole range far more than the chart suggests. Among the four most accurate models, capture differs by only 2.1 points and does not follow the accuracy order. Synthetic forecasts show why: with the same €16/MWh average error, a level shift lost €44 over two years and random noise €24,800, while pulling the evening one hour early lost €24,800 with an error of only €7/MWh.
 
 So I tried the other direction: training the forecaster on the money. Keeping the production model as a fixed base, 100 extra trees are trained on a loss that rewards the battery's profit rather than the price error (SPO+, Elmachtoub and Grigas 2022), with the optimiser's linear relaxation solved 70,000 times per fit. Against a bar fixed before the run, on the 730 validation days it earned €2.93 a day more than median dispatch (95% interval +1.53 to +4.74), €2,138 over two years and 1.3 capture points, with the point's accuracy unchanged at 16.0 €/MWh: the corrections raise the morning and evening by about €1 and lower the night by about €1. The honest caveats: the ten best days carry 58% of the gain, two dark winter days a third, and 2025 alone only just clears zero. Checked afterwards: a cheap hour-of-day bias correction lost money, and other seeds gave the same result. The live pipeline still trades the median forecast.
 
 Two more experiments then went after the evening loss from the forecasting side, each with its pass mark fixed before the run, and both failed it. Nine columns saying why an evening spikes (evening load and its ramp, afternoon solar, evening wind, residual load, recent spikes) changed profit by -€0.76 a day (95% interval -1.97 to +0.52): the model could already see a tight evening coming and still guessed low, because a model trained for average accuracy hedges. A separate model of the chance that the evening reaches €200 was good (AUC 0.91; of the days it put above 70%, 84% spiked) but betting on it in the dispatch, by raising the evening valuation or by holding the battery full for 17:00, earned nothing measurable (-€0.65 and +€0.27 a day, both within noise): when a spike is visible the optimiser already holds charge for it, and the money sits in which quarter-hour the peak lands. The three together say the evening loss is not a shortage of day-level signals about whether the evening will be tight, nor a confidence problem; what is left is consistent with timing within the evening on spike days, and moving it would take a forecast of the peak's shape, quarter-hour by quarter-hour. The plans, written before each run, are in `docs/plans/`.
+
+### The benchmark that forecasts nothing
+
+Every baseline above is a forecaster, including the naive one the table presents as its floor. So I built one
+that is not. For each delivery day, take the mean price of every local time of day over the trailing 730 days
+of the same calendar month, and solve the same optimiser once on that average profile. The schedule uses
+nothing whatever about the day it trades: it is climatology, not prediction, and a test fails if one period of
+the target day leaks into the average.
+
+It captures 84.9%, against the production forecast's 90.1%. The floor was in the wrong place, by seven points.
+Restricting the average to the same calendar month is what does the work: averaging every trailing day instead
+captures 68.7%, with 83 losing days and a worst day of -€200.
+
+What the forecast is worth is the 5.2 points between them, €11.75 a day. It is not spread evenly. Scoring each
+day by how closely its ranking of quarter-hours matched the seasonal shape, then splitting the days into
+fifths:
+
+| the day's ranking of periods | forecast capture | fixed rule | the forecast's edge |
+|---|---|---|---|
+| most ordinary fifth | 92.9% | 93.2% | -€0.94 a day |
+| second | 93.1% | 90.8% | +€6.34 a day |
+| middle | 91.6% | 84.8% | +€17.25 a day |
+| fourth | 86.3% | 76.8% | +€16.19 a day |
+| most broken fifth | 80.8% | 67.3% | +€19.91 a day |
+
+On an ordinary day the forecast is worth nothing measurable and the fixed rule is fractionally ahead. What the
+forecast buys is a slower failure: when a day departs from its pattern the forecast loses 12 points of capture
+and the fixed rule loses 26. The 40% most ordinary days carry 9.2% of the forecast's total edge.
+
+Run again over the 2021-2023 gas crisis the fixed rule captured 84.5%, essentially unchanged, and season for
+season identical, 83.2% in winter in both windows. A trivial yesterday's-prices forecast went the other way,
+from 80.5% to 74.2%: the smooth estimator held while the noisy one degraded. Two of the three predictions I
+registered before that run, that the rule would break and that a trivial forecast would overtake it, failed.
+
+This is not a new idea and the repository should say so: `docs/prior_work.md` records what was already known,
+including a 2026 preprint that runs the same benchmark on French prices and reaches 78%, and a 2025 paper whose
+comparable ordering disagrees with mine. My numbers sit inside the published range rather than outside it.
 
 ### Model health
 
