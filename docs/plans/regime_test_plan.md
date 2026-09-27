@@ -42,15 +42,15 @@ All solved with the production optimiser, the 1 MW / 2 MWh battery, €8 wear,
 two-cycle cap, tied to the day-ahead products actually traded that day, and
 settled at realised prices.
 
-* **`perfect_foresight`** — solved on the day's realised prices. The ceiling. In
+* **`perfect_foresight`:** solved on the day's realised prices. The ceiling. In
   the `recent` window it must reproduce the saved backtest ceiling to the cent.
-* **`fixed_shape`** and **`fixed_shape_seasonal`** — as T8 defines them.
-* **`yesterday`** — the previous delivery day's realised prices, mapped by local
+* **`fixed_shape`** and **`fixed_shape_seasonal`:** as T8 defines them.
+* **`yesterday`:** the previous delivery day's realised prices, mapped by local
   time of day, used as the forecast. The most trivial forecast that exists, and
   the only one available in the `crisis` window, where no trained model exists.
   It is not the repository's `naive_previous_day` model, which carries the full
   quantile pipeline, and is named differently to keep them apart.
-* **`median_forecast`** — the production forecast, reported for `recent` only,
+* **`median_forecast`:** the production forecast, reported for `recent` only,
   where it exists. There is no trained model for the `crisis` window and building
   one is out of scope here.
 

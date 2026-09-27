@@ -29,16 +29,16 @@ Each is computed from realised prices and the fixed shape alone. None uses the
 forecast or its errors, so none can be circular: they describe the day, not the
 model's opinion of it.
 
-* **`shape_agreement`** — Spearman rank correlation between the day's realised
+* **`shape_agreement`:** Spearman rank correlation between the day's realised
   price vector and its seasonal fixed shape. This is the mechanism under test. The
   optimiser needs the *ranking* of periods, not their prices, so a day whose
   ranking held is a day the fixed rule had no reason to get wrong.
-* **`spread`** — the day's highest realised price minus its lowest. How much money
+* **`spread`:** the day's highest realised price minus its lowest. How much money
   was on the table.
-* **`peak_shift`** — hours between the period of the day's realised maximum and
+* **`peak_shift`:** hours between the period of the day's realised maximum and
   the period of the fixed shape's maximum. A direct timing measure, and the same
   quantity the existing finding "timing matters more than size" is about.
-* **`spike`** — whether the day's maximum reached the evaluation spike threshold,
+* **`spike`:** whether the day's maximum reached the evaluation spike threshold,
   €200/MWh. The repository's existing vocabulary, so the answer joins up with T1
   and T5.
 

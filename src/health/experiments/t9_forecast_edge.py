@@ -45,6 +45,7 @@ from src.trading.strategies import MEDIAN_FORECAST
 
 __all__ = [
     "CHARACTERISTICS",
+    "add_edge",
     "capture_by_agreement",
     "characterise",
     "describe_days",
@@ -87,6 +88,20 @@ def characterise(
     }
 
 
+def add_edge(joined: pd.DataFrame) -> pd.DataFrame:
+    """The forecast's edge over the fixed arm, in euros and normalised.
+
+    The sign is the whole experiment: positive means the production forecast
+    earned more than the rule that forecasts nothing. The normalised column
+    divides by what was on the table that day, so a pattern that is only "big
+    days are big" shows up as a pattern that vanishes there.
+    """
+    joined = joined.copy()
+    joined["edge_eur"] = joined[MEDIAN_FORECAST.name] - joined[FIXED]
+    joined["edge_share"] = joined["edge_eur"] / joined["perfect_foresight"]
+    return joined
+
+
 def describe_days(settings: Settings, daily: pd.DataFrame) -> pd.DataFrame:
     """One row per delivery day: its edge, and what kind of day it was."""
     tz = settings.market.timezone
@@ -114,12 +129,7 @@ def describe_days(settings: Settings, daily: pd.DataFrame) -> pd.DataFrame:
             {"target_day": day} | characterise(realised, shape, hours, threshold)
         )
     described = pd.DataFrame(rows).set_index("target_day")
-    joined = daily.join(described, how="inner")
-    joined["edge_eur"] = joined[MEDIAN_FORECAST.name] - joined[FIXED]
-    # The edge as a share of what was on the table that day, so a pattern that is
-    # only "big days are big" shows up as a pattern that vanishes here.
-    joined["edge_share"] = joined["edge_eur"] / joined["perfect_foresight"]
-    return joined
+    return add_edge(daily.join(described, how="inner"))
 
 
 def _groups(frame: pd.DataFrame, name: str) -> pd.Series:
@@ -128,8 +138,8 @@ def _groups(frame: pd.DataFrame, name: str) -> pd.Series:
     A characteristic with many tied values cannot be cut into five equal groups.
     ``peak_shift`` is one: on a large share of days the fixed shape already puts
     the peak in the right period, so its lowest bins collapse onto zero. The
-    duplicate edges are dropped and the page says how many groups survived,
-    rather than forcing five that would not be equal anyway.
+    duplicate edges are dropped, so such a characteristic simply reports fewer
+    groups than five rather than five that would not be equal anyway.
     """
     codes = pd.qcut(frame[name], QUINTILES, duplicates="drop").cat.codes
     labels = pd.Index([f"Q{code + 1}" for code in sorted(codes.unique())])

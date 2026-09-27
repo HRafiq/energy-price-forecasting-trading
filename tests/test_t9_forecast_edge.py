@@ -99,32 +99,32 @@ def test_quarter_hour_days_measure_the_peak_shift_in_hours() -> None:
     assert moved["peak_shift"] == pytest.approx(2.0)
 
 
-def test_the_edge_and_its_normalised_form_come_from_the_saved_profits() -> None:
+def test_the_edge_is_the_forecast_minus_the_fixed_rule_and_not_the_reverse() -> None:
+    """The sign is the whole experiment, so pin it against the real function."""
     day = pd.Timestamp("2024-06-01").date()
-    daily = pd.DataFrame(
-        {
-            "median_forecast": [100.0],
-            "fixed_shape_seasonal": [60.0],
-            "perfect_foresight": [200.0],
-        },
-        index=pd.Index([day], name="target_day"),
-    )
-    described = pd.DataFrame(
-        {
-            "shape_agreement": [0.5],
-            "spread": [30.0],
-            "peak_shift": [1.0],
-            "spike": [False],
-        },
+    joined = pd.DataFrame(
+        {"median_forecast": [100.0], fe.FIXED: [60.0], "perfect_foresight": [200.0]},
         index=pd.Index([day], name="target_day"),
     )
 
-    joined = daily.join(described, how="inner")
-    joined["edge_eur"] = joined["median_forecast"] - joined[fe.FIXED]
-    joined["edge_share"] = joined["edge_eur"] / joined["perfect_foresight"]
+    out = fe.add_edge(joined)
 
-    assert joined["edge_eur"].iloc[0] == pytest.approx(40.0)
-    assert joined["edge_share"].iloc[0] == pytest.approx(0.2)
+    # A forecast that beat the rule must show a POSITIVE edge.
+    assert out["edge_eur"].iloc[0] == pytest.approx(40.0)
+    assert out["edge_share"].iloc[0] == pytest.approx(0.2)
+
+
+def test_a_forecast_that_loses_to_the_fixed_rule_shows_a_negative_edge() -> None:
+    day = pd.Timestamp("2024-06-01").date()
+    joined = pd.DataFrame(
+        {"median_forecast": [40.0], fe.FIXED: [70.0], "perfect_foresight": [100.0]},
+        index=pd.Index([day], name="target_day"),
+    )
+
+    out = fe.add_edge(joined)
+
+    assert out["edge_eur"].iloc[0] == pytest.approx(-30.0)
+    assert out["edge_share"].iloc[0] == pytest.approx(-0.3)
 
 
 def test_the_page_states_each_verdict_from_the_intervals() -> None:

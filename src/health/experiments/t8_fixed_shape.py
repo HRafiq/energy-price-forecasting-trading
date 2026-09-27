@@ -43,7 +43,7 @@ from src.config import (
 )
 from src.health.experiments.t1_mechanism import SUMMER, mean_interval
 from src.trading.battery import Battery
-from src.trading.dispatch_lp import DayProgram, solve_day
+from src.trading.dispatch_lp import DayProgram, solve_day_gross
 from src.trading.optimizer import period_hours, product_blocks
 from src.trading.strategies import MEDIAN_FORECAST, PERFECT_FORESIGHT
 
@@ -202,7 +202,19 @@ def _day_rows(
         }
         for arm, month in (("fixed_shape", None), ("fixed_shape_seasonal", day.month)):
             shape = shape_for(window, index, tz, month)
-            net, _ = solve_day(program, shape)
+            charge, discharge, _ = solve_day_gross(program, shape)
+            # The LP has no binary stopping a period charging and discharging at
+            # once, which at a deeply negative price becomes a way to dump energy
+            # the production MILP would refuse. An averaged shape is far too
+            # smooth to reach there, so the relaxation is tight and this schedule
+            # is the MILP's; if a future window ever breaks that, fail loudly
+            # rather than quietly report a number production could not have made.
+            if bool(((charge > 1e-6) & (discharge > 1e-6)).any()):
+                raise RuntimeError(
+                    f"{arm} charges and discharges at once on {day}: "
+                    "the relaxation is loose and this arm needs the MILP"
+                )
+            net = discharge - charge
             row[arm] = settle(net, realised, battery, dt)
             row[f"{arm}_cycles"] = float(
                 dt * np.clip(net, 0.0, None).sum() / battery.capacity_mwh
@@ -304,8 +316,7 @@ def results_markdown(summary: dict[str, Any]) -> str:
         "",
         f"* the shape of an ordinary day, with no forecast at all: **{shape:.1%}**",
         f"* what the production forecast adds on top of it: **{model - shape:+.1%}**",
-        f"* what nobody reaches, not even perfect foresight's own ceiling: "
-        f"**{1 - model:.1%}**",
+        f"* what the forecast still leaves on the table: **{1 - model:.1%}**",
         "",
         f"The best fixed arm is `{best}`, at €{arms[best]['pnl_eur']:,.0f} against the "
         f"ceiling's €{ceiling:,.0f}.",

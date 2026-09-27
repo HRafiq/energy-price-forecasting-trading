@@ -140,5 +140,37 @@ def test_the_page_reports_the_decomposition_from_the_captures() -> None:
     # The best fixed arm sets the split, not the first one listed.
     assert "no forecast at all: **84.9%**" in page
     assert "adds on top of it: **+5.2%**" in page
-    assert "nobody reaches" in page and "**9.9%**" in page
+    assert "still leaves on the table: **9.9%**" in page
     assert "77.6%" in page
+
+
+def test_a_quarter_hourly_day_averages_each_quarter_hour_separately() -> None:
+    """The 2025-10-01 switch: the shape must carry structure inside the hour.
+
+    Averaging by the hour alone would flatten every quarter-hour to its hourly
+    mean. That silently costs the benchmark a third of its profit, so pin it.
+    """
+    index = pd.date_range("2026-05-31 22:00", periods=96, freq="15min", tz="UTC")
+    # A price that moves within every hour, not just between hours.
+    within_hour = np.tile([0.0, 10.0, 20.0, 30.0], 24)
+    history = pd.Series(within_hour, index=index)
+
+    shape = fs.shape_for(history, index, TZ, None)
+
+    assert shape == pytest.approx(within_hour)
+    # The hourly-only mistake would put 15.0 everywhere; make sure it would fail.
+    assert not np.allclose(shape, np.full(96, 15.0))
+
+
+def test_quarter_hours_of_the_same_clock_time_average_across_days() -> None:
+    two_days = pd.date_range("2026-05-30 22:00", periods=192, freq="15min", tz="UTC")
+    first, second = (
+        np.tile([0.0, 10.0, 20.0, 30.0], 24),
+        np.tile([4.0, 14.0, 24.0, 34.0], 24),
+    )
+    history = pd.Series(np.concatenate([first, second]), index=two_days)
+    index = pd.date_range("2026-06-01 22:00", periods=96, freq="15min", tz="UTC")
+
+    shape = fs.shape_for(history, index, TZ, None)
+
+    assert shape == pytest.approx(np.tile([2.0, 12.0, 22.0, 32.0], 24))

@@ -28,6 +28,8 @@ Capture is a share of that window's own ceiling. The ceilings differ by a factor
 | recent | yesterday | €133,594 | 80.5% | 34 | 1.65 |
 | recent | median_forecast | €149,498 | 90.1% |  |  |
 
+The fixed arms never needed the MILP: the relaxation is tight on every one of their days in both windows, so their schedules are the ones the production optimiser would have produced. Days re-solved exactly, by arm: crisis perfect_foresight 2, fixed_shape 0, fixed_shape_seasonal 0, yesterday 2; recent perfect_foresight 9, fixed_shape 0, fixed_shape_seasonal 0, yesterday 9.
+
 ## What the days themselves looked like
 
 An ordinary day is one whose ranking of periods agrees with its seasonal shape at 0.90 or better, T9's threshold.

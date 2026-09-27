@@ -3,8 +3,9 @@
 The forecast-free benchmark in `docs/results/t8_fixed_shape.md` is not a new idea.
 This note records what was already known before I built it, what my numbers look
 like beside the published ones, and which parts of my results I could not place in
-the literature. Every quotation below was read in the source text, not in an
-abstract or a summary.
+the literature. Quotations from Sioshansi et al. and Le Roux-Tardif were read in
+the body of the paper; those from Maciejowska et al. and Staffell and Rustomji
+come from the abstract, which is marked where it applies.
 
 ## The idea is established, and it is old
 
@@ -13,7 +14,7 @@ electricity storage in PJM: Arbitrage and some welfare effects", *Energy
 Economics* 31(2), 269-277. DOI 10.1016/j.eneco.2008.10.005. They dispatch storage
 on the previous two weeks' prices and settle it at actual prices, which they call
 backcasting, and report the capture against perfect foresight for 2002-2007 in
-their Figure 6. In their words the approach "represents a lower bound of value
+their Figure 6, for a twelve-hour device. In their words the approach "represents a lower bound of value
 capture that will almost certainly be enhanced by basic forecasting". They also
 anticipate why the seasonal restriction matters here: "Although the diurnal hourly
 price patterns differ significantly on a seasonal basis, such differences are
@@ -28,13 +29,14 @@ least 89% of the theoretical perfect-foresight value of storage" for an eight-ho
 pure storage device.
 
 **Staffell and Rustomji (2016).** "Maximising the value of electricity storage",
-*Journal of Energy Storage* 8, 212-225. DOI 10.1016/j.est.2016.08.010. "With no
+*Journal of Energy Storage* 8, 212-225. DOI 10.1016/j.est.2016.08.010. From the abstract: "With no
 foresight of future prices, 75-95% of the optimal profits are gained."
 
 **Le Roux-Tardif (2026).** "Price Information Is Not Enough: Ordering and Decision
 Rules in Storage Bidding", arXiv:2608.08377, August 2026. A preprint, not
 peer-reviewed at the time of writing, and the closest thing to this experiment
-that I found. Same asset as mine, 1 MW / 2 MWh, on 939 French day-ahead days: "The
+that I found. Same power and energy as mine, 1 MW / 2 MWh, though at 85% round-trip against my 90% and 1.5 cycles a day
+against my two, on 939 French day-ahead days: "The
 perfect-foresight bidder earns 61.1 kEUR per megawatt-year of pure day-ahead
 arbitrage. The climatological bidder, who knows only the average price for this
 month and this hour, earns 47.5, or 78% of it." His recommendation is the one I
@@ -49,20 +51,24 @@ holds that boundary with a test that fails if one period of the target day leaks
 in.
 
 **Veenstra and Mulder (2025).** "Profitability of batteries in day-ahead and
-intraday electricity markets", *Energy Economics* 148, 108608. DOI
+intraday electricity markets: Assessment of operation strategies with endogenous
+prices", *Energy Economics* 148, 108608. DOI
 10.1016/j.eneco.2025.108608. The one study I found that puts a fixed schedule and
 a naive forecast in the same framework, and it finds the opposite ordering to
 mine: "the Predefined Periods strategy secures 58% of the profits achieved with
 the Perfect Foresight strategy, while the Naive Forecast strategy captures even
-66%." Their fixed rule is cruder than mine, being one set of buy and sell periods
-for the whole year rather than a monthly average profile, which is the likeliest
-explanation, but it is a genuine disagreement and not something to gloss over.
+66%." Their fixed rule is coarser than mine, being one set of buy and sell periods for
+the whole year rather than a monthly average profile, and their study models price
+impact endogenously and spans day-ahead and intraday, so several things differ at
+once. I have not established which difference accounts for the reversal. It is a
+genuine disagreement and not something to gloss over.
 
 ## Timing over accuracy was already published, on this market
 
 **Maciejowska, Lipiecki and Uniejewski (2026).** "Statistical and economic
 evaluation of forecasts in electricity markets: beyond RMSE and MAE", *Energy
-Conversion and Management* 356, 121408. On DE-LU, the same market as this project:
+Conversion and Management* 356, 121408. DOI 10.1016/j.enconman.2026.121408. On DE-LU, the same
+market as this project, from the abstract:
 "traditional accuracy metrics are only weakly correlated with BESS income", while
 measures reflecting a forecast's "ability to reproduce daily price patterns" track
 it far better. My own finding that an evening shifted one hour early costs as much
@@ -75,12 +81,15 @@ through the threshold that round-trip efficiency imposes on a profitable spread.
 
 ## Where my numbers sit
 
-For German day-ahead arbitrage with a one to two hour battery, published capture
-against perfect foresight runs roughly 84-93% for real forecasts and 78-80% for
-forecast-free rules. This project's 90.1% and 84.9% sit inside both ranges, which
-is the main thing I wanted to know: the measurements are ordinary, not anomalous.
-The comparison is directional only, since markets, cycle caps, wear costs and
-periods all differ.
+No published range exists for the comparison I want, so this is a synthesis across
+markets rather than a like-for-like band, and it should be read as such. The
+forecast-free figures above are 78% (France), "at least 89%" for eight-hour storage
+and 58% for a coarser fixed schedule (the Netherlands), with Staffell and Rustomji
+quoting 75-95% across their cases. Mine, 84.9% on DE-LU, sits inside that scatter
+rather than outside it. That is the main thing I wanted to know: the measurement is
+ordinary, not anomalous. Markets, storage durations, cycle caps, wear costs and
+periods all differ, so nothing here is a controlled comparison and no ranking
+between these studies should be read into it.
 
 ## What I could not place in the literature
 

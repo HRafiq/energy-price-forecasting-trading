@@ -387,6 +387,19 @@ def results_markdown(summary: dict[str, Any], yearly: pd.DataFrame) -> str:
             )
     lines += [
         "",
+        "The fixed arms never needed the MILP: the relaxation is tight on every one "
+        "of their days in both windows, so their schedules are the ones the "
+        "production optimiser would have produced. Days re-solved exactly, by arm: "
+        + "; ".join(
+            f"{name} "
+            + ", ".join(
+                f"{arm} {count}"
+                for arm, count in w[name]["days_resolved_with_the_milp"].items()
+            )
+            for name in ("crisis", "recent")
+        )
+        + ".",
+        "",
         "## What the days themselves looked like",
         "",
         f"An ordinary day is one whose ranking of periods agrees with its seasonal "
