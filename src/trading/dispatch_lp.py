@@ -30,7 +30,7 @@ from scipy.sparse import csr_matrix, vstack
 
 from src.trading.battery import Battery
 
-__all__ = ["DayProgram", "solve_day"]
+__all__ = ["DayProgram", "solve_day", "solve_day_gross"]
 
 
 @dataclass(frozen=True)
@@ -92,16 +92,23 @@ class DayProgram:
         )
 
 
-def solve_day(
+def solve_day_gross(
     program: DayProgram,
     sell: NDArray[np.float64],
     buy: NDArray[np.float64] | None = None,
-) -> tuple[NDArray[np.float64], float]:
-    """Net power (discharge minus charge) per period, and the objective in euros.
+) -> tuple[NDArray[np.float64], NDArray[np.float64], float]:
+    """Charge and discharge per period, and the objective in euros.
 
     ``sell`` values discharging and ``buy`` charging, both in €/MWh; ``buy``
     defaults to ``sell``. The objective is the schedule's value on those prices,
     net of wear, exactly as the production optimiser defines it.
+
+    This is the LP relaxation: unlike the production MILP it has no binary
+    forbidding a period from charging and discharging at once. That is almost
+    never worth doing, but at a sufficiently negative price it becomes a way to
+    dump energy, so a caller that needs the production answer exactly should
+    check the two flows for overlap and re-solve those days with
+    ``optimize_dispatch``.
     """
     prices_buy = sell if buy is None else buy
     if len(sell) != program.n or len(prices_buy) != program.n:
@@ -122,5 +129,14 @@ def solve_day(
     if not result.success:
         raise RuntimeError(f"HiGHS did not solve the day: {result.message}")
     x = np.asarray(result.x, dtype="float64")
-    charge, discharge = x[: program.n], x[program.n :]
-    return discharge - charge, float(-result.fun)
+    return x[: program.n], x[program.n :], float(-result.fun)
+
+
+def solve_day(
+    program: DayProgram,
+    sell: NDArray[np.float64],
+    buy: NDArray[np.float64] | None = None,
+) -> tuple[NDArray[np.float64], float]:
+    """Net power (discharge minus charge) per period, and the objective in euros."""
+    charge, discharge, value = solve_day_gross(program, sell, buy)
+    return discharge - charge, value
