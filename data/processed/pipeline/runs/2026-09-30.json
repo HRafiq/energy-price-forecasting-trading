@@ -1,0 +1,68 @@
+{
+  "target_day": "2026-09-30",
+  "kind": "live",
+  "issued_utc": "2026-09-29T10:24:07+00:00",
+  "gate_utc": "2026-09-29T10:00:00+00:00",
+  "on_time": false,
+  "minutes_before_gate": -24.13,
+  "step": "production",
+  "model": "lightgbm_conformal",
+  "model_version": "1",
+  "readiness": {
+    "target_day": "2026-09-30",
+    "checked_utc": "2026-09-29T10:24:06+00:00",
+    "ready": true,
+    "missing": [],
+    "feeds": [
+      {
+        "name": "prices",
+        "ready": true,
+        "expected": 96,
+        "present": 96,
+        "detail": "prices for 2026-09-29: 96 of 96 periods"
+      },
+      {
+        "name": "load_forecast",
+        "ready": true,
+        "expected": 96,
+        "present": 96,
+        "detail": "load forecast for 2026-09-30: 96 of 96 periods"
+      },
+      {
+        "name": "weather",
+        "ready": true,
+        "expected": 96,
+        "present": 96,
+        "detail": "weather for 2026-09-30: 96 of 96 periods"
+      },
+      {
+        "name": "fuels",
+        "ready": true,
+        "expected": 1,
+        "present": 1,
+        "detail": "fuels: last settlement 2026-09-29, 1 days before delivery"
+      }
+    ]
+  },
+  "attempts": [
+    {
+      "step": "production",
+      "used": true,
+      "detail": "forecast issued",
+      "seconds": 0.791
+    }
+  ],
+  "planned_value_eur": 330.55,
+  "solve_seconds": 0.02,
+  "incidents": [
+    "645ed43a02fc2346"
+  ],
+  "registry": "model version 1",
+  "refit": {
+    "status": "not_due",
+    "detail": "version 1 forecasts from 2026-09-16; the next refit is due for delivery day 2026-10-14",
+    "previous_version": "1",
+    "served_version": "1",
+    "seconds": 0.0
+  }
+}
