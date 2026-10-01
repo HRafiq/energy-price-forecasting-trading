@@ -34,18 +34,25 @@
 # ceiling a hosted job has. It stands down without bidding and leaves the next
 # cron to carry on, so the chain behaves as one long poll made of short jobs.
 #
-# There are three of them because a scheduled run is not a promise. GitHub
+# There are eight of them because a scheduled run is not a promise. GitHub
 # delays them under load and drops them outright, and the first windows after a
 # schedule is registered are the least reliable of all: this workflow's first
 # two scheduled runs never started. Nothing reports that, either, because the
 # failure issue and the incident log both need a run to be running before they
 # can say anything. A schedule that does not fire is silent by construction.
 #
-# So the answer is repetition rather than alarm. Each attempt after the first
-# costs about a minute and a half and bids nothing: the pipeline refuses a day
-# that already has a committed schedule, so whichever attempt gets there first
-# is the bid and the rest exit at the guard. Three independent chances to start
-# turns one dropped run from a missed gate into a late start.
+# So the answer is repetition rather than alarm. An attempt that lands with more
+# than four hours to the gate stands down before the bid step and costs a few
+# minutes of ingest; one that lands inside the window polls and bids, and any
+# that follow it find a day with a committed schedule and are refused at the
+# guard. Eight chances to start turns a dropped run from a missed gate into a
+# late start.
+#
+# What repetition still cannot do is report a day on which every attempt was
+# dropped. The runs that stood down exit green and say nothing, and the gap is
+# only written the following day, by the step that sweeps for days with no bid.
+# Closing that properly needs a heartbeat watched from outside this workflow,
+# which does not exist yet.
 #
 # No secrets. The daily path reads SMARD, Open-Meteo and the fuel prices, none
 # of which need a key. ENTSOE_API_KEY belongs to a separate cross-check that
@@ -165,12 +172,18 @@ jobs:
         run: |
           # Everything here is measured against this delivery day's own gate,
           # not against the clock, so it survives the delivery day rolling over
-          # while a delayed run waits. The summer gate is used all year because
-          # it is the earlier of the two and so the safer to size against.
+          # while a delayed run waits. The gate is 12:00 in Berlin, which is
+          # 10:00 UTC in summer and 11:00 UTC in winter, and it is resolved in
+          # that timezone rather than pinned to the summer value. Pinning it
+          # would make the cutoff fire an hour early all winter, giving up on a
+          # load forecast that still had an hour to arrive. This is the same
+          # instant the Airflow DAG and src/pipeline/daily_run.py derive from
+          # the market's configured gate, so the two arms of the desk agree.
           # Two steps, using the same date form the delivery step already uses,
-          # rather than one expression whose parse is easy to get wrong.
+          # rather than one expression whose parse is easy to get wrong: in
+          # "2026-10-02 10:00 -1 day" the -1 is eaten as a timezone offset.
           gate_day=$(date -u -d "${{ steps.day.outputs.delivery }} -1 day" +%Y-%m-%d)
-          gate=$(date -u -d "$gate_day 10:00" +%s)
+          gate=$(TZ=Europe/Berlin date -d "$gate_day 12:00" +%s)
           # The load forecast lands somewhere between 08:00 and 09:00 UTC, so a
           # run with more than four hours still to go has nothing to poll for.
           too_early=$(( 4 * 60 ))
@@ -187,11 +200,22 @@ jobs:
               echo "proceed=true" >> "$GITHUB_OUTPUT"
               break
             fi
-            if uv run python -m src.pipeline.readiness \
-                 --day ${{ steps.day.outputs.delivery }}; then
+            # Exit 1 is "not ready yet". Anything else is the check itself
+            # broken, which must be loud rather than spend three hours looking
+            # like a feed that never came.
+            set +e
+            uv run python -m src.pipeline.readiness \
+              --day ${{ steps.day.outputs.delivery }}
+            ready=$?
+            set -e
+            if (( ready == 0 )); then
               echo "every feed has arrived, $left min before the gate"
               echo "proceed=true" >> "$GITHUB_OUTPUT"
               break
+            fi
+            if (( ready != 1 )); then
+              echo "readiness exited $ready, which is not 'feeds missing'"
+              exit "$ready"
             fi
             if (( left > too_early )); then
               echo "$left min to the gate and the feeds are not in: standing"
@@ -201,10 +225,20 @@ jobs:
             fi
             echo "waiting five minutes, then rebuilding"
             sleep 300
-            uv run python -m src.ingest.build_dataset \
+            # A slow poke must not carry the run past the gate. SMARD can take
+            # tens of minutes when it is unwell, and the loop only measured the
+            # clock at the top, so one bad rebuild could leave the cutoff behind
+            # and still bid. Cap them, and look at the clock again straight
+            # after rather than at the top of the next lap.
+            timeout 600 uv run python -m src.ingest.build_dataset \
               --through ${{ steps.day.outputs.delivery }} \
-              --history-days ${{ steps.history.outputs.days }}
-            uv run python -m src.ingest.build_inputs
+              --history-days ${{ steps.history.outputs.days }} || true
+            timeout 300 uv run python -m src.ingest.build_inputs || true
+            if (( (gate - $(date -u +%s)) / 60 <= cutoff )); then
+              echo "the rebuild ran into the cutoff: bidding on what there is"
+              echo "proceed=true" >> "$GITHUB_OUTPUT"
+              break
+            fi
           done
 
       - name: Bid
@@ -241,8 +275,8 @@ jobs:
         if: always()
         working-directory: .live-state
         run: |
-          git config user.name "Hasan Rafiq"
-          git config user.email "hassan.rafiq182@gmail.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # -f because the pipeline's own .gitignore covers data/ and the
           # registry; on this branch those files are the entire point.
           git add -Af .

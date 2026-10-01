@@ -200,23 +200,34 @@ flowchart LR
   between 6 hours 22 minutes and 7 hours 39 minutes, which cost the bids for 29 and
   30 September and 1 October 2026. A single margin cannot be sized against a
   distribution that moves, so the schedule does not try: the attempts sit close
-  enough together that whatever the delay happens to be, one of them lands in the
-  window where the feeds exist and the gate is still open. They stop at 09:00 and do
+  enough together that for any delay up to about nine hours, one of them lands in
+  the window where the feeds exist and the gate is still open. Past that nothing a
+  cron can do helps. They stop at 09:00 and do
   not reach into the evening, which would buy more margin, because the delivery day
   is whatever is tomorrow when the job runs, and an evening run that fired on time
   would bid for a day whose gate shut that morning.
 - **An attempt that lands too early stands down rather than waiting.** Everything is
-  measured against the delivery day's own gate, not the clock, so a delayed run that
-  has watched the date roll over still counts from the right instant. More than four
+  measured against the delivery day's own gate, resolved as 12:00 in Berlin rather
+  than pinned to its summer value in UTC, so the run agrees with the Airflow DAG and
+  with the pipeline in winter as well as summer. Measuring against an instant rather
+  than the clock also means a delayed run that has watched the date roll over still
+  counts from the right moment. More than four
   hours out, the load forecast does not exist yet and the run exits without bidding
   and without recording a missed day, leaving the next attempt to carry on. Inside
   that window it polls, rebuilding its inputs on each poke, until the feeds arrive or
   until 45 minutes before the gate, past which it bids with whatever the chain can
-  use. The poll is bounded by construction at 195 minutes, well inside the six hours
-  at which a hosted job is killed. Only an attempt that bid judges the deadline, so a
-  stand-down is never recorded as a miss. It shells into the same modules the Airflow
-  DAG does, with one difference: it does not export the dashboard, which is built on a
-  machine that holds the backtest artifacts. It needs no secrets (SMARD, Open-Meteo and
+  use. The poll is bounded by construction at about 195 minutes, because it can only
+  begin four hours out and always ends at the cutoff, and the rebuilds inside it are
+  capped and the clock re-read after each one so a slow feed cannot carry a run past
+  the gate and have it bid anyway. That is well inside the six hours at which a
+  hosted job is killed. Only an attempt that bid judges the deadline, so a stand-down
+  is never recorded as a miss. The cost of that is the one thing this does not fix:
+  a day on which every attempt is dropped is reported by the sweep the following
+  morning rather than the same day, and closing that needs a heartbeat watched from
+  outside the workflow. It shells into the same modules the Airflow
+  DAG does, with two differences: it does not export the dashboard, which is built on
+  a machine that holds the backtest artifacts, and it gives up waiting 45 minutes
+  before the gate where the DAG's sensor gives up at 30. It needs no secrets (SMARD, Open-Meteo and
   the fuel prices are all keyless), and opens an issue when it fails. The state the desk must remember, about
   7 MB of run records, plans, settlements, saved forecasts, incidents and the model
   registry, is checked out from a `live-state` branch before the run and committed
