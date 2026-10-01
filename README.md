@@ -191,18 +191,30 @@ flowchart LR
 - **The dashboard's Live tab shows the record as it grows:** each delivery day's
   bid time against the gate, which rung of the chain forecast it, the planned value
   against what settled, cycles, incidents, and the drift monitor's warm-up count.
-- **The desk runs on GitHub Actions, not on a laptop.** A scheduled workflow bids
-  three times each morning, at 04:00, 05:30 and 07:00 UTC. That looks far too early
-  for a 12:00 Berlin gate, and it is deliberate: GitHub does not fire these when
-  asked. Measured on this repository, scheduled runs arrived between 4 hours 14
-  minutes and 5 hours 23 minutes late, which put every one of them past the gate.
-  Adding attempts does not fix that, because a delay shifts them all together, so
-  the first has to be early enough to land inside the gate on its own. An early start
-  would otherwise bid before the load forecast is published, so the run waits for the
-  feeds, rebuilding its inputs on each poke, until 09:15 UTC; past that it bids with
-  whatever the chain can use. The extra attempts are nearly free: the pipeline
-  refuses a day that already has a committed schedule, so whichever attempt arrives
-  first is the bid and the rest exit at the guard. It shells into the same modules the Airflow
+- **The desk runs on GitHub Actions, not on a laptop.** Eight scheduled attempts
+  run between 00:13 and 08:47 UTC, all on odd minutes because the top and the half
+  of the hour are the most contended slots on GitHub's scheduler. That looks far too
+  early for a 12:00 Berlin gate, and it is deliberate: GitHub does not fire these
+  when asked. Measured on this repository, scheduled runs first arrived between 4
+  hours 14 minutes and 5 hours 23 minutes late, and the delay later drifted to
+  between 6 hours 22 minutes and 7 hours 39 minutes, which cost the bids for 29 and
+  30 September and 1 October 2026. A single margin cannot be sized against a
+  distribution that moves, so the schedule does not try: the attempts sit close
+  enough together that whatever the delay happens to be, one of them lands in the
+  window where the feeds exist and the gate is still open. They stop at 09:00 and do
+  not reach into the evening, which would buy more margin, because the delivery day
+  is whatever is tomorrow when the job runs, and an evening run that fired on time
+  would bid for a day whose gate shut that morning.
+- **An attempt that lands too early stands down rather than waiting.** Everything is
+  measured against the delivery day's own gate, not the clock, so a delayed run that
+  has watched the date roll over still counts from the right instant. More than four
+  hours out, the load forecast does not exist yet and the run exits without bidding
+  and without recording a missed day, leaving the next attempt to carry on. Inside
+  that window it polls, rebuilding its inputs on each poke, until the feeds arrive or
+  until 45 minutes before the gate, past which it bids with whatever the chain can
+  use. The poll is bounded by construction at 195 minutes, well inside the six hours
+  at which a hosted job is killed. Only an attempt that bid judges the deadline, so a
+  stand-down is never recorded as a miss. It shells into the same modules the Airflow
   DAG does, with one difference: it does not export the dashboard, which is built on a
   machine that holds the backtest artifacts. It needs no secrets (SMARD, Open-Meteo and
   the fuel prices are all keyless), and opens an issue when it fails. The state the desk must remember, about

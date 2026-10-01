@@ -14,10 +14,25 @@
 #
 # Timing. The gate closes at 12:00 Berlin, which is 10:00 UTC in summer and
 # 11:00 UTC in winter, so summer is the case to size for. GitHub does not fire
-# these when asked: measured delays on this repository ran from 4h 14m to 5h
-# 23m, which put every scheduled run hours past the gate. The crons are
-# therefore set early enough that even a five-hour delay lands inside it, and
-# the wait step below stops an early start from bidding before the feeds exist.
+# these when asked. Delays on this repository ran from 4h 14m to 5h 23m through
+# September, and three bids were then missed, for 29 and 30 September and
+# 1 October, when the delay drifted to between 6h 22m and 7h 39m. One cron with
+# one margin cannot be sized against a distribution that moves, so this no
+# longer tries. Eight crons span midnight to 09:00 UTC, close enough together
+# that any delay from none at all up to about nine hours puts some run inside
+# the window where the feeds exist and the gate is still open. Each sits on an
+# odd minute: the top and the half of the hour are the most contended slots on
+# GitHub's scheduler.
+#
+# They stop at 09:00 and do not reach back into the evening, which would buy
+# more margin against a long delay, because the delivery day is whatever is
+# tomorrow when the job actually runs. An evening cron that fired on time would
+# bid for a day whose gate shut that morning and book itself a late bid for
+# nothing.
+#
+# A run that lands with hours still to go does not sit and burn the six-hour
+# ceiling a hosted job has. It stands down without bidding and leaves the next
+# cron to carry on, so the chain behaves as one long poll made of short jobs.
 #
 # There are three of them because a scheduled run is not a promise. GitHub
 # delays them under load and drops them outright, and the first windows after a
@@ -46,9 +61,15 @@ name: daily desk
 
 on:
   schedule:
-    - cron: "0 4 * * *"
-    - cron: "30 5 * * *"
-    - cron: "0 7 * * *"
+    # UTC, deliberately off the hour and the half hour.
+    - cron: "13 0 * * *"
+    - cron: "29 1 * * *"
+    - cron: "41 2 * * *"
+    - cron: "59 3 * * *"
+    - cron: "17 5 * * *"
+    - cron: "43 6 * * *"
+    - cron: "53 7 * * *"
+    - cron: "47 8 * * *"
   workflow_dispatch:
     inputs:
       day:
@@ -130,7 +151,8 @@ jobs:
           uv run python -m src.ingest.fuels
           uv run python -m src.ingest.build_inputs
 
-      - name: Wait for the feeds, until the cutoff
+      - name: Wait for the feeds, until the cutoff or the stand-down
+        id: wait
         # The Airflow DAG polls a sensor until every feed has arrived or the
         # deadline passes; without the same thing here a run that starts before
         # the load forecast is published bids on a fallback rung for no reason.
@@ -141,16 +163,40 @@ jobs:
         # cutoff, which is what a delayed schedule looks like, falls straight
         # through and bids with whatever the chain can use.
         run: |
-          cutoff="09:15"
+          # Everything here is measured against this delivery day's own gate,
+          # not against the clock, so it survives the delivery day rolling over
+          # while a delayed run waits. The summer gate is used all year because
+          # it is the earlier of the two and so the safer to size against.
+          # Two steps, using the same date form the delivery step already uses,
+          # rather than one expression whose parse is easy to get wrong.
+          gate_day=$(date -u -d "${{ steps.day.outputs.delivery }} -1 day" +%Y-%m-%d)
+          gate=$(date -u -d "$gate_day 10:00" +%s)
+          # The load forecast lands somewhere between 08:00 and 09:00 UTC, so a
+          # run with more than four hours still to go has nothing to poll for.
+          too_early=$(( 4 * 60 ))
+          cutoff=$(( 45 ))
+          # The poll needs no cap of its own. It can only start once there are
+          # four hours or less to the gate and it always ends by the cutoff, so
+          # it runs for at most 195 minutes, a long way inside the six hours at
+          # which a hosted job is killed whatever timeout-minutes says. Only a
+          # run leaving this loop with proceed=true goes on to bid.
           while true; do
-            if uv run python -m src.pipeline.readiness \
-                 --day ${{ steps.day.outputs.delivery }}; then
-              echo "every feed has arrived"
+            left=$(( (gate - $(date -u +%s)) / 60 ))
+            if (( left <= cutoff )); then
+              echo "$left min to the gate: bidding on whatever the chain can use"
+              echo "proceed=true" >> "$GITHUB_OUTPUT"
               break
             fi
-            now=$(date -u +%H:%M)
-            if [[ "$now" > "$cutoff" ]]; then
-              echo "past $cutoff UTC: bidding on whatever the chain can use"
+            if uv run python -m src.pipeline.readiness \
+                 --day ${{ steps.day.outputs.delivery }}; then
+              echo "every feed has arrived, $left min before the gate"
+              echo "proceed=true" >> "$GITHUB_OUTPUT"
+              break
+            fi
+            if (( left > too_early )); then
+              echo "$left min to the gate and the feeds are not in: standing"
+              echo "down for the next cron rather than bidding a fallback early"
+              echo "proceed=false" >> "$GITHUB_OUTPUT"
               break
             fi
             echo "waiting five minutes, then rebuilding"
@@ -162,13 +208,17 @@ jobs:
           done
 
       - name: Bid
+        if: steps.wait.outputs.proceed == 'true'
         run: uv run python -m src.pipeline.daily_run --day ${{ steps.day.outputs.delivery }}
         # A plan committed by a run that then died leaves no run record, and the
         # pipeline refuses to guess whether to keep or replace it. That is right,
         # but it must be said once and looked at, not failed every run forever.
 
       - name: Check the deadline
-        if: always()
+        # Only on a run that bid. A run that stood down early is not evidence
+        # that a day was missed, and recording it as one would cry wolf on
+        # every poll of the chain.
+        if: always() && steps.wait.outputs.proceed == 'true'
         run: uv run python -m src.pipeline.daily_run --day ${{ steps.day.outputs.delivery }} --check-deadline
 
       - name: Settle yesterday
