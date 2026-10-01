@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -32,19 +33,23 @@ def _step(name: str) -> dict[str, Any]:
 #: so the gate falls an hour earlier in UTC than it does in winter.
 SUMMER_GATE_UTC_MINUTES = 10 * 60
 #: What a run needs before the gate. GitHub does not fire these on time: delays
-#: measured on this repository ran from 4h 14m to 5h 23m, so the crons are set
-#: early enough that even a long one lands inside the gate, and the wait step
-#: stops an early start from bidding before the feeds exist.
+#: measured on this repository ran from 4h 14m to 5h 23m, and then drifted to
+#: 7h 39m and cost three bids. The schedule no longer leans on one early cron
+#: absorbing that, so this is a floor on the earliest attempt rather than the
+#: whole defence.
 NEEDED_MINUTES = 5 * 60
+#: The worst delay the schedule is built to survive, past which nothing a cron
+#: can do helps: a cron early enough to cover it would fire the evening before,
+#: and an evening run bids for a day whose gate shut that morning.
+WORST_DELAY_MINUTES = 8 * 60
 
 
 def test_the_first_attempt_can_absorb_a_long_scheduler_delay() -> None:
     """GitHub fires these hours late, and all the attempts shift together.
 
-    Measured on this repository: 4h 14m to 5h 23m. Adding attempts does not
-    help, because a delay moves every one of them by roughly the same amount,
-    so the earliest has to be early enough to land inside the gate on its own.
-    The later ones cover a delay that is short or absent.
+    A delay moves every attempt by roughly the same amount, so the earliest has
+    to be early enough that it still lands inside the gate on its own, and no
+    attempt may be scheduled after the gate it is bidding into.
     """
     crons = [entry["cron"] for entry in TRIGGERS["schedule"]]
     assert crons, "no schedule"
@@ -260,6 +265,15 @@ def test_the_runner_uses_the_interpreter_the_model_was_pickled_under() -> None:
     assert f">={pinned}" in requires
 
 
+def _wait_thresholds() -> tuple[int, int]:
+    """The two thresholds the wait step is built on, in minutes before the gate."""
+    run = str(_step("Wait for the feeds")["run"])
+    too_early = re.search(r"too_early=\$\(\(\s*(\d+)\s*\*\s*60\s*\)\)", run)
+    cutoff = re.search(r"cutoff=\$\(\(\s*(\d+)\s*\)\)", run)
+    assert too_early and cutoff, "the wait needs both a stand-down and a cutoff"
+    return int(too_early.group(1)) * 60, int(cutoff.group(1))
+
+
 def test_the_run_waits_for_the_feeds_instead_of_bidding_without_them() -> None:
     """An early start must not cost a fallback bid, which is what it cost before."""
     wait = _step("Wait for the feeds")
@@ -267,9 +281,106 @@ def test_the_run_waits_for_the_feeds_instead_of_bidding_without_them() -> None:
     assert "src.pipeline.readiness" in run
     # Each poke rebuilds, or a feed published since the last one stays invisible.
     assert "src.ingest.build_dataset" in run and "src.ingest.build_inputs" in run
-    # And it gives up in time to bid: the cutoff is before the earlier gate.
-    cutoff = re.search(r'cutoff="(\d\d):(\d\d)"', run)
-    assert cutoff, "the wait needs a cutoff"
-    minutes = int(cutoff.group(1)) * 60 + int(cutoff.group(2))
-    assert minutes < SUMMER_GATE_UTC_MINUTES, "the cutoff must precede the gate"
+    _, cutoff = _wait_thresholds()
+    # It measures against the delivery day's own gate as an instant, not the
+    # clock, so a delayed run that has watched the date roll over still counts
+    # from the right moment. And it gives up long enough before that gate for a
+    # bid to fit in what is left: a daily_run takes minutes, so a cutoff of one
+    # or two would miss the gate anyway.
+    assert "gate_day" in run and "+%s" in run, (
+        "the gate must be an instant, not a clock"
+    )
+    assert cutoff >= 15, "the cutoff leaves too little time to bid"
     assert "continue-on-error" not in wait
+
+
+def test_a_run_that_lands_far_from_the_gate_stands_down_instead_of_bidding() -> None:
+    """The feeds do not exist yet, so polling for them would burn the job limit."""
+    run = str(_step("Wait for the feeds")["run"])
+    too_early, cutoff = _wait_thresholds()
+    assert too_early > cutoff, "the polling window would be empty"
+    assert "proceed=false" in run and "proceed=true" in run
+    # Bounded by construction: polling starts no earlier than too_early before
+    # the gate and ends at the cutoff, so it cannot approach the six hours at
+    # which a hosted job is killed whatever timeout-minutes claims.
+    assert too_early - cutoff < 6 * 60
+
+
+def test_only_a_run_that_bid_goes_on_to_bid_or_to_judge_the_deadline() -> None:
+    """A stand-down is not a missed day, and must not be recorded as one."""
+    assert _step("Bid")["if"] == "steps.wait.outputs.proceed == 'true'"
+    deadline = str(_step("Check the deadline")["if"])
+    assert "steps.wait.outputs.proceed == 'true'" in deadline
+    # Still always(), so a failed bid is still judged.
+    assert "always()" in deadline
+
+
+def test_the_attempts_are_close_enough_that_no_delay_slips_between_them() -> None:
+    """One early cron cannot cover a delay that moves; density is what covers it.
+
+    A run is useful if it lands inside the window between the stand-down and
+    the cutoff. Whatever the delay shifts the whole schedule by, some attempt
+    has to land in that window, which bounds how far apart they may sit.
+    """
+    too_early, cutoff = _wait_thresholds()
+    window = too_early - cutoff
+    starts = sorted(
+        int(h) * 60 + int(m)
+        for m, h, *_ in (entry["cron"].split() for entry in TRIGGERS["schedule"])
+    )
+    gaps = [b - a for a, b in pairwise(starts)]
+    assert max(gaps) <= window, (
+        f"a {max(gaps)} min gap in a {window} min window lets a delay slip through"
+    )
+    # And the earliest must be early enough that the worst delay still lands it
+    # inside the window rather than past the far edge.
+    assert starts[0] <= SUMMER_GATE_UTC_MINUTES - cutoff - WORST_DELAY_MINUTES
+
+
+def test_the_attempts_avoid_the_most_contended_minutes() -> None:
+    """The top and the half of the hour are where every cron on GitHub piles up."""
+    minutes = [int(entry["cron"].split()[0]) for entry in TRIGGERS["schedule"]]
+    assert not {0, 30} & set(minutes), "scheduled on a contended minute"
+
+
+def test_the_wait_resolves_the_real_gate_rather_than_pinning_a_summer_constant() -> (
+    None
+):
+    """Berlin is UTC+2 in summer and UTC+1 in winter, and the desk trades both.
+
+    Pinning the summer value makes the cutoff fire an hour early all winter,
+    giving up on a load forecast that still had an hour to arrive. The DAG and
+    daily_run both resolve 12:00 Europe/Berlin, and this has to agree with them.
+    """
+    run = str(_step("Wait for the feeds")["run"])
+    assert "TZ=Europe/Berlin" in run, "the gate must be resolved in Berlin time"
+    assert "12:00" in run, "the gate is 12:00 local, not a UTC constant"
+    assert "-1 day" in run, "the gate falls the day before the delivery day"
+    assert '"$gate_day 10:00"' not in run, "that is the summer gate, wrong all winter"
+
+
+def test_a_slow_rebuild_cannot_carry_the_run_past_the_gate_and_still_bid() -> None:
+    """The clock was read once a lap, so one bad poke could overshoot the cutoff."""
+    run = str(_step("Wait for the feeds")["run"])
+    assert run.count("timeout ") >= 2, "the in-loop rebuilds must be capped"
+    _, after = run.split("sleep 300", 1)
+    assert "<= cutoff" in after, "the cutoff must be re-checked after a rebuild"
+
+
+def test_a_broken_readiness_is_loud_rather_than_mistaken_for_a_late_feed() -> None:
+    """Exit 1 is 'not ready'. A crash must not look like a feed that never came."""
+    run = str(_step("Wait for the feeds")["run"])
+    assert "ready != 1" in run, "every non-zero exit is being read as not ready"
+    assert 'exit "$ready"' in run, "a broken readiness must fail the step"
+
+
+def test_the_schedule_is_the_one_the_readme_and_the_coverage_argument_describe() -> (
+    None
+):
+    crons = [entry["cron"] for entry in TRIGGERS["schedule"]]
+    assert len(crons) == 8, "the README and the coverage argument both say eight"
+
+
+def test_the_concurrency_group_is_fixed_so_two_runs_can_never_bid_at_once() -> None:
+    """A per-run group would let eight attempts race for one committed schedule."""
+    assert "${{" not in str(PARSED["concurrency"]["group"])
