@@ -1,5 +1,5 @@
 {
-  "generated_utc": "2026-10-01T10:43:20+00:00",
+  "generated_utc": "2026-10-01T11:44:40+00:00",
   "through": "2026-10-01",
   "model": "lightgbm_conformal",
   "window_days": 28,
