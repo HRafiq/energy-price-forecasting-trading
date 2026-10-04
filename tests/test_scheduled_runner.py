@@ -384,3 +384,50 @@ def test_the_schedule_is_the_one_the_readme_and_the_coverage_argument_describe()
 def test_the_concurrency_group_is_fixed_so_two_runs_can_never_bid_at_once() -> None:
     """A per-run group would let eight attempts race for one committed schedule."""
     assert "${{" not in str(PARSED["concurrency"]["group"])
+
+
+def test_the_poll_refetches_the_feeds_that_can_arrive_while_it_waits() -> None:
+    """Rebuilding is not fetching, and a feed nobody fetches again never arrives.
+
+    The loop rebuilt the dataset every five minutes but never re-ran the weather
+    fetch, so a run that caught the weather four quarter-hours short rebuilt that
+    same shortfall for three hours and bid a fallback rung. The shortfall is this
+    repository's own doing: open_meteo masks anything stamped past as_of plus the
+    lead minus the archive lag, and as_of only moves when the fetch is repeated.
+
+    Fuels is deliberately not in here. It is fetched with an exclusive end of
+    today, so within one day it can only ever return the same settlement, and it
+    writes its frame wholesale rather than merging, so a degraded response would
+    shrink it rather than add to it.
+    """
+    polled = set(
+        re.findall(r"src\.ingest\.\w+", str(_step("Wait for the feeds")["run"]))
+    )
+    assert "src.ingest.open_meteo" in polled, (
+        "the poll waits on weather without ever fetching it again"
+    )
+    assert "src.ingest.build_dataset" in polled and "src.ingest.build_inputs" in polled
+    assert "src.ingest.fuels" not in polled, (
+        "fuels cannot change within a day and overwrites rather than merges"
+    )
+
+
+def test_one_poll_lap_fits_inside_the_cutoff_it_is_racing() -> None:
+    """A lap that overruns the cutoff bids past the gate and logs that it did not.
+
+    The clock is read at the top of the lap, so a lap beginning one minute inside
+    the cutoff must still end before the gate.
+    """
+    run = str(_step("Wait for the feeds")["run"])
+    _, cutoff = _wait_thresholds()
+    body = run.split("sleep 300", 1)[1]
+    commands = [
+        line.strip() for line in body.splitlines() if "uv run python -m" in line
+    ]
+    assert commands, "no commands found after the sleep"
+    caps = [int(m) for m in re.findall(r"timeout (\d+)", run)]
+    assert len(caps) == len(commands), f"an uncapped command in the poll: {commands}"
+    lap = 300 + sum(caps)
+    assert lap <= cutoff * 60, (
+        f"a {lap // 60} min lap can start {cutoff} min out and end past the gate"
+    )
