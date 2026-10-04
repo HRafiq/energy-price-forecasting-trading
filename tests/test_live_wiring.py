@@ -17,13 +17,28 @@ def test_the_dag_builds_the_dataset_through_the_delivery_day() -> None:
     assert DAG.count("src.ingest.build_dataset --through {DAY}") == 2
 
 
-def test_the_sensor_rebuilds_its_inputs_before_checking_readiness() -> None:
-    sensor = _between(DAG, 'task_id="wait_for_inputs"', 'task_id="forecast"')
+def test_the_sensor_refetches_and_rebuilds_before_checking_readiness() -> None:
+    """Rebuilding is not fetching, and a feed nobody fetches again never arrives.
+
+    open_meteo masks anything stamped past the moment of the fetch plus its lead
+    minus the archive lag, so a poke that only rebuilds sees the same shortfall
+    it saw five minutes ago. The GitHub runner lost three days of production
+    forecasts to exactly that once its schedule moved earlier.
+    """
+    block = _between(DAG, 'task_id="wait_for_inputs"', 'task_id="forecast"')
+    # The comment above the command names these modules too, so read the command.
+    sensor = "\n".join(
+        line for line in block.splitlines() if not line.lstrip().startswith("#")
+    )
     assert (
         sensor.index("build_dataset")
+        < sensor.index("src.ingest.open_meteo")
         < sensor.index("build_inputs")
         < sensor.index("src.pipeline.readiness")
     )
+    # Fuels is deliberately absent: exclusive of today, so it cannot change
+    # within a day, and it overwrites its frame rather than merging into it.
+    assert "src.ingest.fuels" not in sensor
 
 
 def test_make_pipeline_builds_through_the_delivery_day() -> None:
