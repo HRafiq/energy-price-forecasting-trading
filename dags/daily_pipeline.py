@@ -103,11 +103,21 @@ with DAG(
 
     wait = BashSensor(
         task_id="wait_for_inputs",
-        # Rebuild on every poke: checking the file built at 10:30 would never see a
-        # load forecast that SMARD publishes a few minutes later. A failed rebuild
-        # keeps the last good files, so readiness always runs after it.
+        # Re-fetch and rebuild on every poke: checking the file built at 10:30
+        # would never see a load forecast that SMARD publishes a few minutes
+        # later. The weather has to be re-fetched, not merely rebuilt, because
+        # src.ingest.open_meteo masks anything stamped past the moment of the
+        # fetch plus its lead minus the archive lag, so the mask relaxes only
+        # when the fetch is repeated. Rebuilding alone cost the GitHub runner
+        # three days of production forecasts once its schedule moved earlier;
+        # this sensor has been safe only because 10:30 Berlin is late enough
+        # that the mask has already cleared. Fuels is not re-fetched: its end is
+        # exclusive of today, so within a day it can only return the same
+        # settlement, and it writes its frame wholesale rather than merging.
+        # A failed rebuild keeps the last good files, so readiness always runs.
         bash_command=(
             f"{RUN} src.ingest.build_dataset --through {DAY}; "
+            f"{RUN} src.ingest.open_meteo; "
             f"{RUN} src.ingest.build_inputs; "
             f"{RUN} src.pipeline.readiness --day {DAY}"
         ),
@@ -165,7 +175,6 @@ with DAG(
         trigger_rule=TriggerRule.ALL_DONE,
         retries=1,
     )
-
 
     drift = BashOperator(
         task_id="check_drift",
