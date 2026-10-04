@@ -163,8 +163,13 @@ jobs:
         # The Airflow DAG polls a sensor until every feed has arrived or the
         # deadline passes; without the same thing here a run that starts before
         # the load forecast is published bids on a fallback rung for no reason.
-        # Each poke rebuilds, because a feed published since the last one is
-        # only visible after the dataset and inputs are rebuilt. The cutoff is
+        # Each poke re-fetches every feed the step above fetched and then
+        # rebuilds, because a feed that has published since the last poke is
+        # invisible until it has been fetched again as well as rebuilt. Polling
+        # only the rebuild is what cost the production forecast on 3, 4 and 5
+        # October: the runs landed hours earlier than they used to, caught the
+        # weather four quarter-hours short, and then rebuilt the same shortfall
+        # every five minutes until the cutoff. The cutoff is
         # 45 minutes before the summer gate at 10:00 UTC, which is the earlier
         # of the two gates, so it holds all year. A run that starts after the
         # cutoff, which is what a delayed schedule looks like, falls straight
@@ -233,6 +238,9 @@ jobs:
             timeout 600 uv run python -m src.ingest.build_dataset \
               --through ${{ steps.day.outputs.delivery }} \
               --history-days ${{ steps.history.outputs.days }} || true
+            timeout 300 uv run python -m src.ingest.open_meteo \
+              --history-days ${{ steps.history.outputs.days }} || true
+            timeout 120 uv run python -m src.ingest.fuels || true
             timeout 300 uv run python -m src.ingest.build_inputs || true
             if (( (gate - $(date -u +%s)) / 60 <= cutoff )); then
               echo "the rebuild ran into the cutoff: bidding on what there is"

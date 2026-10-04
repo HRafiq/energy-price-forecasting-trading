@@ -384,3 +384,38 @@ def test_the_schedule_is_the_one_the_readme_and_the_coverage_argument_describe()
 def test_the_concurrency_group_is_fixed_so_two_runs_can_never_bid_at_once() -> None:
     """A per-run group would let eight attempts race for one committed schedule."""
     assert "${{" not in str(PARSED["concurrency"]["group"])
+
+
+def test_the_poll_refetches_every_feed_it_is_waiting_on() -> None:
+    """Rebuilding is not fetching, and a feed nobody fetches again never arrives.
+
+    The loop rebuilt the dataset every five minutes but re-ran only two of the
+    four ingest modules, so a weather forecast that was four quarter-hours short
+    when the run started was still four short three hours later. Once the crons
+    moved earlier the runs began landing before the weather was complete, and
+    that cost the production forecast on three consecutive days.
+    """
+    fetched: set[str] = set()
+    for step in STEPS:
+        if step.get("id") == "wait":
+            continue
+        fetched |= set(re.findall(r"src\.ingest\.\w+", str(step.get("run", ""))))
+    polled = set(
+        re.findall(r"src\.ingest\.\w+", str(_step("Wait for the feeds")["run"]))
+    )
+    assert fetched, "no ingest modules found to compare against"
+    assert not fetched - polled, (
+        f"the poll never re-fetches {sorted(fetched - polled)}, so waiting for "
+        "them cannot help"
+    )
+
+
+def test_every_command_inside_the_poll_is_capped() -> None:
+    """A slow feed must not eat the window it is being waited for in."""
+    body = str(_step("Wait for the feeds")["run"]).split("sleep 300", 1)[1]
+    commands = [
+        line.strip() for line in body.splitlines() if "uv run python -m" in line
+    ]
+    assert commands, "no commands found after the sleep"
+    uncapped = [c for c in commands if not c.startswith("timeout ")]
+    assert not uncapped, f"uncapped command in the poll: {uncapped}"
