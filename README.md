@@ -214,12 +214,16 @@ flowchart LR
   counts from the right moment. More than four
   hours out, the load forecast does not exist yet and the run exits without bidding
   and without recording a missed day, leaving the next attempt to carry on. Inside
-  that window it polls, rebuilding its inputs on each poke, until the feeds arrive or
-  until 45 minutes before the gate, past which it bids with whatever the chain can
-  use. The poll is bounded by construction at about 195 minutes, because it can only
-  begin four hours out and always ends at the cutoff, and the rebuilds inside it are
-  capped and the clock re-read after each one so a slow feed cannot carry a run past
-  the gate and have it bid anyway. That is well inside the six hours at which a
+  that window it polls, re-fetching the weather and rebuilding its inputs on each
+  poke, until the feeds arrive or until 45 minutes before the gate, past which it bids
+  with whatever the chain can use. Re-fetching matters as much as rebuilding, and the
+  reason is this repository rather than the weather service: the ingest masks any
+  value stamped later than the moment of the fetch plus its lead minus an archive lag,
+  which is how it refuses to train on a forecast nobody held yet, so the mask only
+  relaxes when the fetch is repeated. For an ordinary delivery day it clears two hours
+  before the gate. The poll is bounded by construction at about 195 minutes, because
+  it can only begin four hours out and always ends at the cutoff, and every command
+  inside it is capped so that one lap fits inside the cutoff it is racing. That is well inside the six hours at which a
   hosted job is killed. Only an attempt that bid judges the deadline, so a stand-down
   is never recorded as a miss. The cost of that is the one thing this does not fix:
   a day on which every attempt is dropped is reported by the sweep the following
@@ -292,7 +296,7 @@ the same 0 of 96 while SMARD already held all 96 quarter-hours of that day's loa
 forecast, which exposed the cause: the dataset build trimmed every row after the last
 published price, and on a live day that is the whole day being forecast. A live build
 now keeps the delivery day's rows with the price left blank, the readiness check
-rebuilds its inputs each time it polls, and a rerun never replaces a committed
+re-fetches the weather and rebuilds its inputs each time it polls, and a rerun never replaces a committed
 schedule.
 
 The machine was then off from 18 to 20 September. A bid for delivery day D is made
