@@ -163,13 +163,23 @@ jobs:
         # The Airflow DAG polls a sensor until every feed has arrived or the
         # deadline passes; without the same thing here a run that starts before
         # the load forecast is published bids on a fallback rung for no reason.
-        # Each poke re-fetches every feed the step above fetched and then
-        # rebuilds, because a feed that has published since the last poke is
-        # invisible until it has been fetched again as well as rebuilt. Polling
-        # only the rebuild is what cost the production forecast on 3, 4 and 5
-        # October: the runs landed hours earlier than they used to, caught the
-        # weather four quarter-hours short, and then rebuilt the same shortfall
-        # every five minutes until the cutoff. The cutoff is
+        # Each poke re-fetches the weather and then rebuilds. Rebuilding alone
+        # is not enough, and the reason is this repository rather than the API:
+        # open_meteo masks every value stamped later than as_of + lead_days -
+        # ARCHIVE_LAG, which is how it refuses to train on a forecast nobody
+        # held yet. as_of is the moment of the fetch, so the mask relaxes only
+        # when the fetch is repeated. Open-Meteo already holds those values.
+        #
+        # With lead_days 2 and ARCHIVE_LAG 10h the mask clears the last stamp of
+        # an ordinary delivery day at 08:00 UTC in summer and 09:00 in winter,
+        # two hours before the gate either way. Polling only the rebuild is what
+        # cost the production forecast on 3, 4 and 5 October: the runs landed
+        # hours earlier than they used to, caught the weather four quarter-hours
+        # short, and rebuilt that same shortfall every five minutes to the
+        # cutoff. The 25-hour delivery day each October is the tight case: it
+        # needs an extra hour of weather while its gate is still on summer time,
+        # which leaves well under an hour between the mask clearing and the
+        # cutoff. That is not solved here. The cutoff is
         # 45 minutes before the summer gate at 10:00 UTC, which is the earlier
         # of the two gates, so it holds all year. A run that starts after the
         # cutoff, which is what a delayed schedule looks like, falls straight
@@ -198,10 +208,16 @@ jobs:
           # it runs for at most 195 minutes, a long way inside the six hours at
           # which a hosted job is killed whatever timeout-minutes says. Only a
           # run leaving this loop with proceed=true goes on to bid.
+          weather_fails=0
           while true; do
             left=$(( (gate - $(date -u +%s)) / 60 ))
             if (( left <= cutoff )); then
               echo "$left min to the gate: bidding on whatever the chain can use"
+              if (( weather_fails > 0 )); then
+                echo "::error::gave up with $weather_fails failed weather fetches:"
+                echo "::error::this bid is degraded because a fetch broke, not"
+                echo "::error::because the data had not published yet"
+              fi
               echo "proceed=true" >> "$GITHUB_OUTPUT"
               break
             fi
@@ -235,13 +251,15 @@ jobs:
             # clock at the top, so one bad rebuild could leave the cutoff behind
             # and still bid. Cap them, and look at the clock again straight
             # after rather than at the top of the next lap.
-            timeout 600 uv run python -m src.ingest.build_dataset \
+            timeout 420 uv run python -m src.ingest.build_dataset \
               --through ${{ steps.day.outputs.delivery }} \
               --history-days ${{ steps.history.outputs.days }} || true
-            timeout 300 uv run python -m src.ingest.open_meteo \
-              --history-days ${{ steps.history.outputs.days }} || true
-            timeout 120 uv run python -m src.ingest.fuels || true
-            timeout 300 uv run python -m src.ingest.build_inputs || true
+            if ! timeout 300 uv run python -m src.ingest.open_meteo \
+                 --history-days ${{ steps.history.outputs.days }}; then
+              echo "::warning::the weather fetch failed or timed out on this poke"
+              weather_fails=$(( weather_fails + 1 ))
+            fi
+            timeout 180 uv run python -m src.ingest.build_inputs || true
             if (( (gate - $(date -u +%s)) / 60 <= cutoff )); then
               echo "the rebuild ran into the cutoff: bidding on what there is"
               echo "proceed=true" >> "$GITHUB_OUTPUT"

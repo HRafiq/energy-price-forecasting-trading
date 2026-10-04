@@ -386,36 +386,48 @@ def test_the_concurrency_group_is_fixed_so_two_runs_can_never_bid_at_once() -> N
     assert "${{" not in str(PARSED["concurrency"]["group"])
 
 
-def test_the_poll_refetches_every_feed_it_is_waiting_on() -> None:
+def test_the_poll_refetches_the_feeds_that_can_arrive_while_it_waits() -> None:
     """Rebuilding is not fetching, and a feed nobody fetches again never arrives.
 
-    The loop rebuilt the dataset every five minutes but re-ran only two of the
-    four ingest modules, so a weather forecast that was four quarter-hours short
-    when the run started was still four short three hours later. Once the crons
-    moved earlier the runs began landing before the weather was complete, and
-    that cost the production forecast on three consecutive days.
+    The loop rebuilt the dataset every five minutes but never re-ran the weather
+    fetch, so a run that caught the weather four quarter-hours short rebuilt that
+    same shortfall for three hours and bid a fallback rung. The shortfall is this
+    repository's own doing: open_meteo masks anything stamped past as_of plus the
+    lead minus the archive lag, and as_of only moves when the fetch is repeated.
+
+    Fuels is deliberately not in here. It is fetched with an exclusive end of
+    today, so within one day it can only ever return the same settlement, and it
+    writes its frame wholesale rather than merging, so a degraded response would
+    shrink it rather than add to it.
     """
-    fetched: set[str] = set()
-    for step in STEPS:
-        if step.get("id") == "wait":
-            continue
-        fetched |= set(re.findall(r"src\.ingest\.\w+", str(step.get("run", ""))))
     polled = set(
         re.findall(r"src\.ingest\.\w+", str(_step("Wait for the feeds")["run"]))
     )
-    assert fetched, "no ingest modules found to compare against"
-    assert not fetched - polled, (
-        f"the poll never re-fetches {sorted(fetched - polled)}, so waiting for "
-        "them cannot help"
+    assert "src.ingest.open_meteo" in polled, (
+        "the poll waits on weather without ever fetching it again"
+    )
+    assert "src.ingest.build_dataset" in polled and "src.ingest.build_inputs" in polled
+    assert "src.ingest.fuels" not in polled, (
+        "fuels cannot change within a day and overwrites rather than merges"
     )
 
 
-def test_every_command_inside_the_poll_is_capped() -> None:
-    """A slow feed must not eat the window it is being waited for in."""
-    body = str(_step("Wait for the feeds")["run"]).split("sleep 300", 1)[1]
+def test_one_poll_lap_fits_inside_the_cutoff_it_is_racing() -> None:
+    """A lap that overruns the cutoff bids past the gate and logs that it did not.
+
+    The clock is read at the top of the lap, so a lap beginning one minute inside
+    the cutoff must still end before the gate.
+    """
+    run = str(_step("Wait for the feeds")["run"])
+    _, cutoff = _wait_thresholds()
+    body = run.split("sleep 300", 1)[1]
     commands = [
         line.strip() for line in body.splitlines() if "uv run python -m" in line
     ]
     assert commands, "no commands found after the sleep"
-    uncapped = [c for c in commands if not c.startswith("timeout ")]
-    assert not uncapped, f"uncapped command in the poll: {uncapped}"
+    caps = [int(m) for m in re.findall(r"timeout (\d+)", run)]
+    assert len(caps) == len(commands), f"an uncapped command in the poll: {commands}"
+    lap = 300 + sum(caps)
+    assert lap <= cutoff * 60, (
+        f"a {lap // 60} min lap can start {cutoff} min out and end past the gate"
+    )
