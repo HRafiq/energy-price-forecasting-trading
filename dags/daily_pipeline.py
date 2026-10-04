@@ -9,7 +9,8 @@ Timing, for delivery day D+1 forecast on day D:
 
 * the run starts at 10:30 local, an hour before the 11:40 issue time;
 * ingest refreshes prices, weather and fuels, retrying on a flaky download;
-* ``wait_for_inputs`` rebuilds the dataset and inputs and runs the readiness check
+* ``wait_for_inputs`` re-fetches the weather, rebuilds the dataset and inputs, and
+  runs the readiness check
   on every poke, until every feed has arrived or the deadline passes, so a feed
   published after the 10:30 ingest is still seen. It exits non-zero while anything
   is missing;
@@ -109,9 +110,12 @@ with DAG(
         # src.ingest.open_meteo masks anything stamped past the moment of the
         # fetch plus its lead minus the archive lag, so the mask relaxes only
         # when the fetch is repeated. Rebuilding alone cost the GitHub runner
-        # three days of production forecasts once its schedule moved earlier;
-        # this sensor has been safe only because 10:30 Berlin is late enough
-        # that the mask has already cleared. Fuels is not re-fetched: its end is
+        # three days of production forecasts once its schedule moved earlier.
+        # This sensor mostly escaped it because 10:30 Berlin is late enough that
+        # the mask has usually cleared by the first poke, but not on the 25-hour
+        # delivery day each October, which needs an extra hour of weather: there
+        # the mask clears at 11:00, inside the poke window, so the re-fetch is
+        # what saves that day rather than a belt on top of a brace. Fuels is not re-fetched: its end is
         # exclusive of today, so within a day it can only return the same
         # settlement, and it writes its frame wholesale rather than merging.
         # A failed rebuild keeps the last good files, so readiness always runs.
