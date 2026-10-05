@@ -1,6 +1,6 @@
 {
-  "generated_utc": "2026-10-04T14:24:24+00:00",
-  "through": "2026-10-04",
+  "generated_utc": "2026-10-05T05:37:42+00:00",
+  "through": "2026-10-05",
   "model": "lightgbm_conformal",
   "window_days": 28,
   "thresholds": {
@@ -42,6 +42,10 @@
     },
     {
       "day": "2026-10-04",
+      "reason": "forecast by no_weather"
+    },
+    {
+      "day": "2026-10-05",
       "reason": "forecast by no_weather"
     }
   ],
