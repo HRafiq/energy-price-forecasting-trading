@@ -482,3 +482,51 @@ def test_everything_costly_is_skipped_once_the_day_is_bid() -> None:
         assert gate in str(_step(name).get("if", "")), f"{name} still runs for nothing"
     # The issue step must stay unconditional on failure, or a real break goes quiet.
     assert _step("Open an issue if the desk failed")["if"] == "failure()"
+
+
+def test_a_feed_that_will_not_fetch_does_not_stop_the_inputs_being_built() -> None:
+    """A 429 killed the rebuild, so three later steps died on a file nobody wrote.
+
+    The fallback chain exists for a feed that is missing. It cannot do its job if
+    the step that would have reported the feed missing never reaches
+    build_inputs, because then model_inputs_quarterhour.parquet does not exist
+    and every always() step after it fails on a traceback pointing nowhere near
+    the cause.
+    """
+    run = str(_step("Rebuild the market data")["run"])
+    # The comment above the commands names the same modules, so read the commands.
+    body = "\n".join(
+        line for line in run.splitlines() if not line.lstrip().startswith("#")
+    )
+    for feed in ("open_meteo", "fuels"):
+        line = next(ln for ln in body.splitlines() if f"src.ingest.{feed}" in ln)
+        assert line.lstrip().startswith("if !"), f"{feed} can still kill the rebuild"
+    # build_inputs runs last and unguarded, so the file always exists.
+    assert body.index("build_inputs") > body.index("src.ingest.fuels")
+    inputs_line = next(
+        ln for ln in body.splitlines() if "src.ingest.build_inputs" in ln
+    )
+    assert inputs_line.lstrip().startswith("uv run"), "build_inputs must not be skipped"
+    # Prices are different: without them there is nothing to bid on.
+    dataset = next(ln for ln in body.splitlines() if "build_dataset" in ln)
+    assert dataset.lstrip().startswith("uv run"), (
+        "a missing price feed must fail loudly"
+    )
+
+
+def test_the_poll_does_not_refetch_the_weather_on_every_poke() -> None:
+    """Open-Meteo's free tier counts points times variables times days.
+
+    Re-fetching every five minutes across eight runs a day exhausted the daily
+    allowance and returned 429 for the rest of it, which is what broke 9 October.
+    """
+    run = str(_step("Wait for the feeds")["run"])
+    assert "next_weather" in run, "the weather fetch is not throttled"
+    gap = int(
+        re.search(r"next_weather=\$\(\( \$\(date -u \+%s\) \+ (\d+) \* 60", run).group(
+            1
+        )
+    )
+    # Long enough to matter against a five-minute poke, short enough that the
+    # mask clearing is noticed well inside the window.
+    assert 10 <= gap <= 30, f"a {gap} minute weather interval is not sensible"

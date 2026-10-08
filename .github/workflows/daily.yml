@@ -181,12 +181,25 @@ jobs:
       - name: Rebuild the market data
         if: steps.bid_already.outputs.done != 'true'
         run: |
+          # A feed that will not fetch is what the fallback chain is for: the
+          # readiness check reports it missing and the chain steps down a rung.
+          # A feed that kills this step is something else entirely, because
+          # build_inputs never runs, model_inputs_quarterhour.parquet is never
+          # written, and every always() step after it dies on the missing file
+          # with a traceback that points nowhere near the cause. That is what an
+          # Open-Meteo 429 did on 9 October. So the fetches warn and the build
+          # always runs; only build_dataset is allowed to fail the step, because
+          # without prices there is nothing to bid on at all.
           uv run python -m src.ingest.build_dataset \
             --through ${{ steps.day.outputs.delivery }} \
             --history-days ${{ steps.history.outputs.days }}
-          uv run python -m src.ingest.open_meteo \
-            --history-days ${{ steps.history.outputs.days }}
-          uv run python -m src.ingest.fuels
+          if ! uv run python -m src.ingest.open_meteo \
+               --history-days ${{ steps.history.outputs.days }}; then
+            echo "::warning::the weather fetch failed; the chain will step down"
+          fi
+          if ! uv run python -m src.ingest.fuels; then
+            echo "::warning::the fuels fetch failed; the chain will step down"
+          fi
           uv run python -m src.ingest.build_inputs
 
       - name: Wait for the feeds, until the cutoff or the stand-down
@@ -241,6 +254,7 @@ jobs:
           # which a hosted job is killed whatever timeout-minutes says. Only a
           # run leaving this loop with proceed=true goes on to bid.
           weather_fails=0
+          next_weather=0
           while true; do
             left=$(( (gate - $(date -u +%s)) / 60 ))
             if (( left <= cutoff )); then
@@ -286,10 +300,19 @@ jobs:
             timeout 420 uv run python -m src.ingest.build_dataset \
               --through ${{ steps.day.outputs.delivery }} \
               --history-days ${{ steps.history.outputs.days }} || true
-            if ! timeout 300 uv run python -m src.ingest.open_meteo \
-                 --history-days ${{ steps.history.outputs.days }}; then
-              echo "::warning::the weather fetch failed or timed out on this poke"
-              weather_fails=$(( weather_fails + 1 ))
+            # Not on every poke. Open-Meteo's free tier counts points times
+            # variables times days, so a five-minute re-fetch across eight runs
+            # a day exhausted the daily allowance and returned 429 for the rest
+            # of it. The mask this is waiting on relaxes by a quarter-hour per
+            # quarter-hour of wall clock, so a quarter-hourly fetch loses
+            # nothing and costs a fifth as much.
+            if (( $(date -u +%s) >= next_weather )); then
+              next_weather=$(( $(date -u +%s) + 15 * 60 ))
+              if ! timeout 300 uv run python -m src.ingest.open_meteo \
+                   --history-days ${{ steps.history.outputs.days }}; then
+                echo "::warning::the weather fetch failed or timed out on this poke"
+                weather_fails=$(( weather_fails + 1 ))
+              fi
             fi
             timeout 180 uv run python -m src.ingest.build_inputs || true
             if (( (gate - $(date -u +%s)) / 60 <= cutoff )); then

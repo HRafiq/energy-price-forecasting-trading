@@ -201,10 +201,18 @@ flowchart LR
   question asked before uv, the project or a byte of market data, from the state branch
   already checked out. Only the first attempt to land in the window has work to do; the
   rest used to spend ten minutes each reaching a guard that refused them.
+- **A feed that will not fetch degrades the bid; it does not kill the run.** The
+  weather and fuel fetches warn and the inputs are always rebuilt, so the readiness
+  check can report what is missing and the chain can step down. Letting a fetch fail
+  the step meant nothing downstream had a file to read, and three later steps died on
+  a traceback pointing nowhere near the cause.
 - **Re-fetching matters as much as rebuilding.** The weather ingest masks anything
   stamped past the moment of the fetch plus its lead minus an archive lag, so the mask
   relaxes only when the fetch is repeated. Polling the rebuild alone cost three days of
-  production forecasts once the schedule moved earlier.
+  production forecasts once the schedule moved earlier. The re-fetch runs every quarter
+  of an hour rather than every poke: Open-Meteo's free tier counts points times
+  variables times days, and a five-minute re-fetch across eight runs a day exhausted
+  the daily allowance.
 - **State travels, market data does not.** About 7 MB of run records, plans,
   settlements, incidents and the registry live on a `live-state` branch, so each bid's
   time is in a commit. The data is rebuilt from source, 86 days on an ordinary run
