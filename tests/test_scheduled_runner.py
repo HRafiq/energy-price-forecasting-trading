@@ -120,7 +120,15 @@ def test_a_missing_feed_does_not_stop_the_bid() -> None:
 def test_the_state_is_saved_even_when_the_bid_failed() -> None:
     """A failed run still made incidents worth keeping."""
     for name in ("Settle yesterday", "Record the days", "Save the desk", "Commit the"):
-        assert _step(name)["if"] == "always()"
+        # always(), so a failed bid still saves what the run learned. The only
+        # other condition allowed is the early exit, and a run that stopped there
+        # has nothing to save.
+        clause = str(_step(name)["if"])
+        assert clause.startswith("always()"), name
+        assert clause.replace("always()", "").strip(" &") in (
+            "",
+            "steps.bid_already.outputs.done != 'true'",
+        ), name
     assert _step("Open an issue")["if"] == "failure()"
 
 
@@ -308,7 +316,7 @@ def test_a_run_that_lands_far_from_the_gate_stands_down_instead_of_bidding() -> 
 
 def test_only_a_run_that_bid_goes_on_to_bid_or_to_judge_the_deadline() -> None:
     """A stand-down is not a missed day, and must not be recorded as one."""
-    assert _step("Bid")["if"] == "steps.wait.outputs.proceed == 'true'"
+    assert "steps.wait.outputs.proceed == 'true'" in str(_step("Bid")["if"])
     deadline = str(_step("Check the deadline")["if"])
     assert "steps.wait.outputs.proceed == 'true'" in deadline
     # Still always(), so a failed bid is still judged.
@@ -431,3 +439,46 @@ def test_one_poll_lap_fits_inside_the_cutoff_it_is_racing() -> None:
     assert lap <= cutoff * 60, (
         f"a {lap // 60} min lap can start {cutoff} min out and end past the gate"
     )
+
+
+def test_a_day_already_bid_on_time_stops_before_anything_expensive() -> None:
+    """Eight attempts, one of which has work to do; the rest must be cheap.
+
+    Each attempt used to rebuild the whole market dataset before it could learn
+    that the day was already traded, so five runs a day did ten minutes of work
+    for nothing and committed the state again at the end of it.
+    """
+    check = _step("Stop here if this day is already bid")
+    names = [str(s.get("name", "")) for s in STEPS]
+    # Before the toolchain, not merely before the rebuild: installing uv and
+    # syncing the project is most of what a skipped run would otherwise cost.
+    for later in ("Install uv", "Install the project", "Rebuild the market data"):
+        assert names.index(check["name"]) < names.index(later), later
+    # It reads the state branch's own checkout, which is why it can run this early.
+    assert ".live-state/" in str(check["run"])
+    # And only a live bid that made its gate counts: a reconstruction leaves the
+    # day unbid, and a late bid is still a day worth a record.
+    run = str(check["run"])
+    assert "'live'" in run and "on_time" in run
+
+
+def test_everything_costly_is_skipped_once_the_day_is_bid() -> None:
+    gate = "steps.bid_already.outputs.done != 'true'"
+    for name in (
+        "Read the pinned interpreter",
+        "Install uv",
+        "Install the project",
+        "Restore the desk's state",
+        "Work out how much history this run needs",
+        "Rebuild the market data",
+        "Wait for the feeds, until the cutoff or the stand-down",
+        "Bid",
+        "Settle yesterday",
+        "Record the days with no bid",
+        "Run the drift monitor",
+        "Save the desk's state",
+        "Commit the state",
+    ):
+        assert gate in str(_step(name).get("if", "")), f"{name} still runs for nothing"
+    # The issue step must stay unconditional on failure, or a real break goes quiet.
+    assert _step("Open an issue if the desk failed")["if"] == "failure()"

@@ -107,15 +107,51 @@ jobs:
           ref: live-state
           path: .live-state
 
+      - name: Work out the delivery day
+        id: day
+        run: |
+          day="${{ inputs.day }}"
+          if [ -z "$day" ]; then day=$(date -u -d "tomorrow" +%Y-%m-%d); fi
+          echo "delivery=$day" >> "$GITHUB_OUTPUT"
+          echo "settle=$(date -u -d "$day -1 day" +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "Bidding for $day"
+
+      - name: Stop here if this day is already bid
+        id: bid_already
+        # The first thing asked, before uv, before the project, before a byte of
+        # market data. Eight attempts a day is the right answer to a scheduler
+        # delay that moves, but only the first to land in the window has work to
+        # do. The rest used to install the toolchain, rebuild the whole market
+        # dataset, re-run a bid the pipeline then refused, settle a day already
+        # settled and commit the state again: five ten-minute runs a day doing
+        # nothing, five more commits on the state branch, and five more chances
+        # to fail at something that did not matter. The state branch is already
+        # checked out by here, so the run record is on disk and the question
+        # costs a file read.
+        run: |
+          record=".live-state/data/processed/pipeline/runs/${{ steps.day.outputs.delivery }}.json"
+          done=false
+          if [ -f "$record" ]; then
+            # Only a live bid that made its gate. A reconstruction leaves the day
+            # unbid, and a late bid is a day still worth another run record.
+            if python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r.get('kind') == 'live' and r.get('on_time') else 1)" "$record"; then
+              done=true
+            fi
+          fi
+          echo "${{ steps.day.outputs.delivery }} already bid on time: $done"
+          echo "done=$done" >> "$GITHUB_OUTPUT"
+
       # setup-uv has no python-version-file input; passing one is accepted
       # silently and does nothing, so the version is read here and handed over
       # explicitly. .python-version stays the single source of truth, which uv
       # also reads on a laptop.
       - name: Read the pinned interpreter
+        if: steps.bid_already.outputs.done != 'true'
         id: python
         run: echo "version=$(cat .python-version)" >> "$GITHUB_OUTPUT"
 
       - name: Install uv
+        if: steps.bid_already.outputs.done != 'true'
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -126,21 +162,15 @@ jobs:
           python-version: ${{ steps.python.outputs.version }}
 
       - name: Install the project
+        if: steps.bid_already.outputs.done != 'true'
         run: uv sync --frozen
 
       - name: Restore the desk's state
+        if: steps.bid_already.outputs.done != 'true'
         run: uv run python -m src.pipeline.state restore --store .live-state
 
-      - name: Work out the delivery day
-        id: day
-        run: |
-          day="${{ inputs.day }}"
-          if [ -z "$day" ]; then day=$(date -u -d "tomorrow" +%Y-%m-%d); fi
-          echo "delivery=$day" >> "$GITHUB_OUTPUT"
-          echo "settle=$(date -u -d "$day -1 day" +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-          echo "Bidding for $day"
-
       - name: Work out how much history this run needs
+        if: steps.bid_already.outputs.done != 'true'
         id: history
         run: |
           days=$(uv run python -m src.pipeline.history \
@@ -149,6 +179,7 @@ jobs:
           echo "fetching $days days of history"
 
       - name: Rebuild the market data
+        if: steps.bid_already.outputs.done != 'true'
         run: |
           uv run python -m src.ingest.build_dataset \
             --through ${{ steps.day.outputs.delivery }} \
@@ -159,6 +190,7 @@ jobs:
           uv run python -m src.ingest.build_inputs
 
       - name: Wait for the feeds, until the cutoff or the stand-down
+        if: steps.bid_already.outputs.done != 'true'
         id: wait
         # The Airflow DAG polls a sensor until every feed has arrived or the
         # deadline passes; without the same thing here a run that starts before
@@ -268,7 +300,7 @@ jobs:
           done
 
       - name: Bid
-        if: steps.wait.outputs.proceed == 'true'
+        if: steps.bid_already.outputs.done != 'true' && steps.wait.outputs.proceed == 'true'
         run: uv run python -m src.pipeline.daily_run --day ${{ steps.day.outputs.delivery }}
         # A plan committed by a run that then died leaves no run record, and the
         # pipeline refuses to guess whether to keep or replace it. That is right,
@@ -278,27 +310,27 @@ jobs:
         # Only on a run that bid. A run that stood down early is not evidence
         # that a day was missed, and recording it as one would cry wolf on
         # every poll of the chain.
-        if: always() && steps.wait.outputs.proceed == 'true'
+        if: always() && steps.bid_already.outputs.done != 'true' && steps.wait.outputs.proceed == 'true'
         run: uv run python -m src.pipeline.daily_run --day ${{ steps.day.outputs.delivery }} --check-deadline
 
       - name: Settle yesterday
-        if: always()
+        if: always() && steps.bid_already.outputs.done != 'true'
         run: uv run python -m src.pipeline.daily_run --day ${{ steps.day.outputs.settle }} --settle
 
       - name: Record the days with no bid
-        if: always()
+        if: always() && steps.bid_already.outputs.done != 'true'
         run: uv run python -m src.pipeline.gaps --through ${{ steps.day.outputs.settle }}
 
       - name: Run the drift monitor
-        if: always()
+        if: always() && steps.bid_already.outputs.done != 'true'
         run: uv run python -m src.pipeline.drift_check --through ${{ steps.day.outputs.settle }}
 
       - name: Save the desk's state
-        if: always()
+        if: always() && steps.bid_already.outputs.done != 'true'
         run: uv run python -m src.pipeline.state save --store .live-state
 
       - name: Commit the state
-        if: always()
+        if: always() && steps.bid_already.outputs.done != 'true'
         working-directory: .live-state
         run: |
           git config user.name "github-actions[bot]"

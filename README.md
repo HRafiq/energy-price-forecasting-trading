@@ -197,6 +197,10 @@ flowchart LR
   the next carries on, so the chain is one long poll made of short jobs. Inside the
   window it re-fetches the weather and rebuilds on each poke, until the feeds arrive or
   45 minutes before the gate.
+- **An attempt for a day already bid on time stops at its first step.** That is the
+  question asked before uv, the project or a byte of market data, from the state branch
+  already checked out. Only the first attempt to land in the window has work to do; the
+  rest used to spend ten minutes each reaching a guard that refused them.
 - **Re-fetching matters as much as rebuilding.** The weather ingest masks anything
   stamped past the moment of the fetch plus its lead minus an archive lag, so the mask
   relaxes only when the fetch is repeated. Polling the rebuild alone cost three days of
