@@ -115,7 +115,8 @@ with DAG(
         # the mask has usually cleared by the first poke, but not on the 25-hour
         # delivery day each October, which needs an extra hour of weather: there
         # the mask clears at 11:00, inside the poke window, so the re-fetch is
-        # what saves that day rather than a belt on top of a brace. Fuels is not re-fetched: its end is
+        # what saves that day rather than a belt on top of a brace. Fuels is not
+        # re-fetched: its end is
         # exclusive of today, so within a day it can only return the same
         # settlement, and it writes its frame wholesale rather than merging.
         # A failed rebuild keeps the last good files, so readiness always runs.
