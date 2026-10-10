@@ -1,0 +1,82 @@
+{
+  "target_day": "2026-10-11",
+  "kind": "live",
+  "issued_utc": "2026-10-10T09:17:50+00:00",
+  "gate_utc": "2026-10-10T10:00:00+00:00",
+  "on_time": true,
+  "minutes_before_gate": 42.16,
+  "step": "seasonal_naive",
+  "model": "seasonal_naive_previous_week",
+  "model_version": null,
+  "readiness": {
+    "target_day": "2026-10-11",
+    "checked_utc": "2026-10-10T09:17:49+00:00",
+    "ready": false,
+    "missing": [
+      "prices"
+    ],
+    "feeds": [
+      {
+        "name": "prices",
+        "ready": false,
+        "expected": 96,
+        "present": 0,
+        "detail": "prices for 2026-10-10: 0 of 96 periods, 96 missing"
+      },
+      {
+        "name": "load_forecast",
+        "ready": true,
+        "expected": 96,
+        "present": 96,
+        "detail": "load forecast for 2026-10-11: 96 of 96 periods"
+      },
+      {
+        "name": "weather",
+        "ready": true,
+        "expected": 96,
+        "present": 96,
+        "detail": "weather for 2026-10-11: 96 of 96 periods"
+      },
+      {
+        "name": "fuels",
+        "ready": true,
+        "expected": 1,
+        "present": 1,
+        "detail": "fuels: last settlement 2026-10-10, 1 days before delivery"
+      }
+    ]
+  },
+  "attempts": [
+    {
+      "step": "production",
+      "used": false,
+      "detail": "skipped, waiting on prices",
+      "seconds": 0.0
+    },
+    {
+      "step": "no_weather",
+      "used": false,
+      "detail": "skipped, waiting on prices",
+      "seconds": 0.0
+    },
+    {
+      "step": "seasonal_naive",
+      "used": true,
+      "detail": "forecast issued",
+      "seconds": 0.04
+    }
+  ],
+  "planned_value_eur": 312.99,
+  "solve_seconds": 0.019,
+  "incidents": [
+    "17793867943e00b5"
+  ],
+  "registry": "model version 1",
+  "refit": {
+    "status": "not_due",
+    "detail": "version 1 forecasts from 2026-09-16; the next refit is due for delivery day 2026-10-14",
+    "previous_version": "1",
+    "served_version": "1",
+    "seconds": 0.0
+  }
+}
