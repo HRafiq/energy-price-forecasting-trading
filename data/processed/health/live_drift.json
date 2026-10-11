@@ -1,6 +1,6 @@
 {
-  "generated_utc": "2026-10-10T09:18:00+00:00",
-  "through": "2026-10-10",
+  "generated_utc": "2026-10-11T05:45:03+00:00",
+  "through": "2026-10-11",
   "model": "lightgbm_conformal",
   "window_days": 28,
   "thresholds": {
@@ -51,6 +51,10 @@
     {
       "day": "2026-10-10",
       "reason": "prices not all published"
+    },
+    {
+      "day": "2026-10-11",
+      "reason": "forecast by seasonal_naive"
     }
   ],
   "incidents": [],
