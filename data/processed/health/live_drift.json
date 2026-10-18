@@ -1,6 +1,6 @@
 {
-  "generated_utc": "2026-10-17T08:04:03+00:00",
-  "through": "2026-10-17",
+  "generated_utc": "2026-10-18T04:30:51+00:00",
+  "through": "2026-10-18",
   "model": "lightgbm_conformal",
   "window_days": 28,
   "thresholds": {
@@ -11,9 +11,9 @@
     "coverage_alert_share": 0.047945,
     "pinball_alert_share": 0.042466
   },
-  "scored_days": 22,
+  "scored_days": 23,
   "warming_up": true,
-  "status": "warming up: 22 of 28 scored days",
+  "status": "warming up: 23 of 28 scored days",
   "latest": null,
   "skipped": [
     {
@@ -248,6 +248,15 @@
       "day": "2026-10-17",
       "coverage_90": 0.9895833333333334,
       "pinball": 5.9942465235751845,
+      "rolling_coverage_90": null,
+      "rolling_pinball_ratio": null,
+      "coverage_alert": false,
+      "pinball_alert": false
+    },
+    {
+      "day": "2026-10-18",
+      "coverage_90": 0.9375,
+      "pinball": 6.3188407089597085,
       "rolling_coverage_90": null,
       "rolling_pinball_ratio": null,
       "coverage_alert": false,
