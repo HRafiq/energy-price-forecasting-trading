@@ -203,9 +203,14 @@ flowchart LR
   rest used to spend ten minutes each reaching a guard that refused them.
 - **A feed that will not fetch degrades the bid; it does not kill the run.** The
   weather and fuel fetches warn and the inputs are always rebuilt, so the readiness
-  check can report what is missing and the chain can step down. Letting a fetch fail
-  the step meant nothing downstream had a file to read, and three later steps died on
-  a traceback pointing nowhere near the cause.
+  check can report what is missing and the chain can step down. Only a missing price
+  feed is fatal, because without prices there is nothing to bid on, and the steps that
+  read the rebuilt inputs wait for it to have worked rather than failing a second and
+  third time on a file nobody wrote.
+- **A day too early to settle is not a failure.** The first attempts of the morning run
+  hours before the auction's prices are published. The guard that refuses to value a
+  half-priced day stays; the run prints why and carries on, and a later attempt settles
+  it.
 - **Re-fetching matters as much as rebuilding.** The weather ingest masks anything
   stamped past the moment of the fetch plus its lead minus an archive lag, so the mask
   relaxes only when the fetch is repeated. Polling the rebuild alone cost three days of
