@@ -179,6 +179,7 @@ jobs:
           echo "fetching $days days of history"
 
       - name: Rebuild the market data
+        id: rebuild
         if: steps.bid_already.outputs.done != 'true'
         run: |
           # A feed that will not fetch is what the fallback chain is for: the
@@ -337,7 +338,10 @@ jobs:
         run: uv run python -m src.pipeline.daily_run --day ${{ steps.day.outputs.delivery }} --check-deadline
 
       - name: Settle yesterday
-        if: always() && steps.bid_already.outputs.done != 'true'
+        # Both read the inputs the rebuild writes. When the rebuild did not
+        # run there is no file for them to read, and failing here turns one
+        # upstream problem into three red steps with the cause buried.
+        if: always() && steps.bid_already.outputs.done != 'true' && steps.rebuild.outcome == 'success'
         run: uv run python -m src.pipeline.daily_run --day ${{ steps.day.outputs.settle }} --settle
 
       - name: Record the days with no bid
@@ -345,7 +349,10 @@ jobs:
         run: uv run python -m src.pipeline.gaps --through ${{ steps.day.outputs.settle }}
 
       - name: Run the drift monitor
-        if: always() && steps.bid_already.outputs.done != 'true'
+        # Both read the inputs the rebuild writes. When the rebuild did not
+        # run there is no file for them to read, and failing here turns one
+        # upstream problem into three red steps with the cause buried.
+        if: always() && steps.bid_already.outputs.done != 'true' && steps.rebuild.outcome == 'success'
         run: uv run python -m src.pipeline.drift_check --through ${{ steps.day.outputs.settle }}
 
       - name: Save the desk's state

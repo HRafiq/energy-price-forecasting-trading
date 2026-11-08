@@ -41,6 +41,7 @@ __all__ = [
     "META_COLUMNS",
     "PLAN_COLUMNS",
     "Plan",
+    "PricesNotPublishedError",
     "load_plan",
     "main",
     "plan_day",
@@ -181,12 +182,22 @@ def load_plan(settings: Settings, day: date) -> Plan:
     return Plan.from_frame(pd.read_parquet(path))
 
 
+class PricesNotPublishedError(ValueError):
+    """The day cannot be settled yet because its prices are not all published.
+
+    Its own type because it is the one expected reason a settlement cannot be
+    made. The desk's first attempts of the morning run hours before SMARD has
+    published the day's prices, and a day that is merely too early to value is
+    not a failure: a later attempt settles it.
+    """
+
+
 def settle_plan(plan: Plan, prices: pd.Series, battery: Battery) -> Settlement:
     """Value a committed plan at the prices the auction actually cleared."""
     aligned = prices.reindex(plan.schedule.index)
     if aligned.isna().any():
         missing = int(aligned.isna().sum())
-        raise ValueError(
+        raise PricesNotPublishedError(
             f"{plan.target_day}: {missing} of {len(aligned)} periods have no price yet"
         )
     return settle(plan.schedule, aligned, battery)
