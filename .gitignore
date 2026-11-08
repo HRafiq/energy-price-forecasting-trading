@@ -236,3 +236,6 @@ docs/learning_notes.md
 # Airflow: its own environment and home, never committed
 .venv-airflow/
 airflow_home/
+
+# The desk's state, restored from its own branch for a local run.
+.live-state/
