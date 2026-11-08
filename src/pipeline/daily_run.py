@@ -65,6 +65,7 @@ from src.pipeline.model_source import (
 )
 from src.pipeline.plan import (
     Plan,
+    PricesNotPublishedError,
     load_plan,
     plan_day,
     plan_path,
@@ -637,7 +638,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"{args.day}: no schedule was committed, so there is nothing to settle"
             )
             return 0
-        print(json.dumps(settle_day(settings, args.day), indent=2))
+        try:
+            print(json.dumps(settle_day(settings, args.day), indent=2))
+        except PricesNotPublishedError as exc:
+            # Not a failure. The desk's first attempts of the morning run before
+            # SMARD has published the day's prices; a later one settles it.
+            print(f"{args.day}: not settled yet, {exc}")
         return 0
 
     try:

@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal
 
 import numpy as np
@@ -637,3 +638,26 @@ def test_a_missing_run_record_is_reported_not_raised(
     )
     assert incident.severity == "critical" and incident.status == "review"
     assert str(LIVE_DAY) in incident.detail
+
+
+def test_a_day_whose_prices_are_not_published_is_not_a_settlement_failure(
+    tmp_path: Path, settings: Settings
+) -> None:
+    """The desk's first attempts run hours before SMARD publishes the day's prices.
+
+    Failing there turned an ordinary too-early run red, twice on 10 October, and
+    the day settled perfectly well on a later attempt.
+    """
+    from src.pipeline.plan import PricesNotPublishedError, settle_plan
+
+    assert issubclass(PricesNotPublishedError, ValueError)
+    # The guard still refuses to value a half-priced day.
+    index = pd.date_range("2026-10-10", periods=4, freq="15min", tz="UTC")
+    schedule = pd.DataFrame(
+        {"charge_mw": 0.0, "discharge_mw": 0.0, "net_mw": 0.0, "soc_mwh": 1.0},
+        index=index,
+    )
+    plan = SimpleNamespace(target_day=index[0].date(), schedule=schedule)
+    prices = pd.Series([50.0, np.nan, 50.0, 50.0], index=index)
+    with pytest.raises(PricesNotPublishedError):
+        settle_plan(plan, prices, settings.battery)  # type: ignore[arg-type]

@@ -125,10 +125,16 @@ def test_the_state_is_saved_even_when_the_bid_failed() -> None:
         # has nothing to save.
         clause = str(_step(name)["if"])
         assert clause.startswith("always()"), name
-        assert clause.replace("always()", "").strip(" &") in (
-            "",
+        # The only conditions allowed alongside always() are the early exit,
+        # which means there was nothing to do, and the rebuild having worked,
+        # without which the steps that read its inputs have no file to read.
+        rest = {
+            c.strip() for c in clause.replace("always()", "").split("&&") if c.strip()
+        }
+        assert rest <= {
             "steps.bid_already.outputs.done != 'true'",
-        ), name
+            "steps.rebuild.outcome == 'success'",
+        }, name
     assert _step("Open an issue")["if"] == "failure()"
 
 
@@ -530,3 +536,17 @@ def test_the_poll_does_not_refetch_the_weather_on_every_poke() -> None:
     # Long enough to matter against a five-minute poke, short enough that the
     # mask clearing is noticed well inside the window.
     assert 10 <= gap <= 30, f"a {gap} minute weather interval is not sensible"
+
+
+def test_the_steps_that_read_the_inputs_wait_for_the_rebuild_to_have_worked() -> None:
+    """One upstream failure should not become three red steps with the cause buried.
+
+    A transient SMARD outage failed the rebuild on 28 October, and Settle and the
+    drift monitor then failed on a model inputs parquet nobody had written, with
+    tracebacks pointing at pandas rather than at the outage.
+    """
+    assert _step("Rebuild the market data").get("id") == "rebuild"
+    for name in ("Settle yesterday", "Run the drift monitor"):
+        assert "steps.rebuild.outcome == 'success'" in str(_step(name)["if"]), name
+    # The gap scan reads none of those inputs, so it must still run regardless.
+    assert "steps.rebuild" not in str(_step("Record the days with no bid")["if"])
