@@ -232,14 +232,23 @@ flowchart LR
 - **The hold-out stays frozen:** the pipeline refuses any delivery day before
   `live_from`, the day after the hold-out was last scored.
 
-**The record so far.** 20 delivery days from 16 September 2026, 17 of them bid: 12 on
-time and 5 late. Two more were reconstructed afterwards and are counted separately, and
-one, 21 September, has no forecast at all and is marked "desk offline" on the Live tab.
-Eleven bids used the production model, three a fallback after a feed was missing, three
-a fallback caused by the polling bug above. Sixteen have settled, at €6,811 against
-€6,901 planned. Every failure behind those numbers is in the incident log or the commit
-history. One is in neither and cannot be: a scheduled run that never starts writes
-nothing at all, and only the next morning's sweep for unbid days catches it.
+**The record so far.** 55 delivery days from 16 September 2026, 52 of them bid: 47 on
+time and 5 late, all five in the first fortnight before the schedule was fixed. Two more
+were reconstructed afterwards and are counted separately, and one, 21 September, has no
+forecast at all and is marked "desk offline" on the Live tab. Forty-five bids used the
+production model, four a fallback after a feed was missing, three a fallback caused by a
+polling bug since fixed. Fifty have settled, at €14,757 against €15,778 planned, 93.5% of
+plan. The desk refit itself on 14 October and has served version 2 since.
+
+**The drift monitor is in alert, and it is right to be.** Rolling 28-day pinball loss is
+1.91 times its validation median against a 1.5 threshold; coverage is fine at 78.4%.
+Measured against the same calendar months of validation rather than the all-year median,
+live pinball runs 1.6 to 2.2 times higher. Most of that is the market rather than the
+model: within-day spreads over these weeks averaged €187/MWh against €137 and €142 in the
+same months of 2024 and 2025, and the standard deviation of price is up by about 45%. The
+rest is real degradation, and refitting does move it, from a mean of 10.67 before the
+October refit to 9.54 after. The monitor flags for review rather than refitting early, by
+design; the next scheduled refit is due for delivery day 11 November.
 
 ## Three things I learned
 
