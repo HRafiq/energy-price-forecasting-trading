@@ -1,0 +1,6 @@
+mlflow==3.16.0
+lightgbm
+numpy
+pandas
+pydantic
+scikit-learn

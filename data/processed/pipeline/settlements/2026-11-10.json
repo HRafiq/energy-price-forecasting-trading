@@ -1,0 +1,14 @@
+{
+  "target_day": "2026-11-10",
+  "step": "production",
+  "model": "lightgbm_conformal",
+  "strategy": "median_forecast",
+  "planned_value_eur": 312.33,
+  "revenue_eur": 497.67,
+  "degradation_eur": 27.18,
+  "pnl_eur": 470.49,
+  "charged_mwh": 3.7749,
+  "discharged_mwh": 3.3974,
+  "cycles": 1.7906,
+  "settled_utc": "2026-11-10T09:13:21+00:00"
+}
