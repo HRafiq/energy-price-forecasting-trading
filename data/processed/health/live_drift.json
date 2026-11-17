@@ -1,6 +1,6 @@
 {
-  "generated_utc": "2026-11-16T09:13:43+00:00",
-  "through": "2026-11-16",
+  "generated_utc": "2026-11-17T09:12:04+00:00",
+  "through": "2026-11-17",
   "model": "lightgbm_conformal",
   "window_days": 28,
   "thresholds": {
@@ -11,13 +11,13 @@
     "coverage_alert_share": 0.047945,
     "pinball_alert_share": 0.042466
   },
-  "scored_days": 51,
+  "scored_days": 52,
   "warming_up": false,
   "status": "in alert",
   "latest": {
-    "day": "2026-11-16",
-    "rolling_coverage_90": 0.7343982169390788,
-    "rolling_pinball_ratio": 2.331296207088628,
+    "day": "2026-11-17",
+    "rolling_coverage_90": 0.7269687964338781,
+    "rolling_pinball_ratio": 2.366706908570115,
     "coverage_alert": true,
     "pinball_alert": true
   },
@@ -504,6 +504,15 @@
       "pinball": 5.449362301600137,
       "rolling_coverage_90": 0.7343982169390788,
       "rolling_pinball_ratio": 2.331296207088628,
+      "coverage_alert": true,
+      "pinball_alert": true
+    },
+    {
+      "day": "2026-11-17",
+      "coverage_90": 0.7916666666666666,
+      "pinball": 9.26294463464507,
+      "rolling_coverage_90": 0.7269687964338781,
+      "rolling_pinball_ratio": 2.366706908570115,
       "coverage_alert": true,
       "pinball_alert": true
     }
