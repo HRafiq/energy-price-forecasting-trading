@@ -1,6 +1,6 @@
 {
-  "generated_utc": "2026-11-18T09:10:36+00:00",
-  "through": "2026-11-18",
+  "generated_utc": "2026-11-19T09:09:43+00:00",
+  "through": "2026-11-19",
   "model": "lightgbm_conformal",
   "window_days": 28,
   "thresholds": {
@@ -15,9 +15,9 @@
   "warming_up": false,
   "status": "in alert",
   "latest": {
-    "day": "2026-11-18",
-    "rolling_coverage_90": 0.7243684992570579,
-    "rolling_pinball_ratio": 2.38665166096873,
+    "day": "2026-11-19",
+    "rolling_coverage_90": 0.7299405646359584,
+    "rolling_pinball_ratio": 2.3523853296489006,
     "coverage_alert": true,
     "pinball_alert": true
   },
@@ -45,18 +45,9 @@
   ],
   "incidents": [
     "e531df8548f56396",
-    "6828548249ea338d"
+    "e9f645455daf2fbf"
   ],
   "series": [
-    {
-      "day": "2026-09-23",
-      "coverage_90": 0.6979166666666666,
-      "pinball": 9.405964049740495,
-      "rolling_coverage_90": null,
-      "rolling_pinball_ratio": null,
-      "coverage_alert": false,
-      "pinball_alert": false
-    },
     {
       "day": "2026-09-24",
       "coverage_90": 0.6979166666666666,
@@ -295,10 +286,10 @@
       "day": "2026-10-25",
       "coverage_90": 1.0,
       "pinball": 4.085229115141564,
-      "rolling_coverage_90": 0.8224368499257058,
-      "rolling_pinball_ratio": 1.6010111035722958,
+      "rolling_coverage_90": null,
+      "rolling_pinball_ratio": null,
       "coverage_alert": false,
-      "pinball_alert": true
+      "pinball_alert": false
     },
     {
       "day": "2026-10-26",
@@ -513,6 +504,15 @@
       "pinball": 8.71943066609415,
       "rolling_coverage_90": 0.7243684992570579,
       "rolling_pinball_ratio": 2.38665166096873,
+      "coverage_alert": true,
+      "pinball_alert": true
+    },
+    {
+      "day": "2026-11-19",
+      "coverage_90": 1.0,
+      "pinball": 4.796996488669667,
+      "rolling_coverage_90": 0.7299405646359584,
+      "rolling_pinball_ratio": 2.3523853296489006,
       "coverage_alert": true,
       "pinball_alert": true
     }
