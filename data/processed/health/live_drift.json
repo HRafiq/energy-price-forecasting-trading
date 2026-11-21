@@ -1,6 +1,6 @@
 {
-  "generated_utc": "2026-11-20T10:14:40+00:00",
-  "through": "2026-11-20",
+  "generated_utc": "2026-11-21T10:18:40+00:00",
+  "through": "2026-11-21",
   "model": "lightgbm_conformal",
   "window_days": 28,
   "thresholds": {
@@ -23,10 +23,6 @@
   },
   "skipped": [
     {
-      "day": "2026-09-25",
-      "reason": "forecast by seasonal_naive"
-    },
-    {
       "day": "2026-10-03",
       "reason": "forecast by no_weather"
     },
@@ -45,6 +41,10 @@
     {
       "day": "2026-11-20",
       "reason": "prices not all published"
+    },
+    {
+      "day": "2026-11-21",
+      "reason": "forecast by seasonal_naive"
     }
   ],
   "incidents": [
