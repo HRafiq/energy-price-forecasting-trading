@@ -1,0 +1,14 @@
+{
+  "target_day": "2026-11-26",
+  "step": "seasonal_naive",
+  "model": "seasonal_naive_previous_week",
+  "strategy": "median_forecast",
+  "planned_value_eur": 218.22,
+  "revenue_eur": 224.51,
+  "degradation_eur": 22.38,
+  "pnl_eur": 202.13,
+  "charged_mwh": 3.1082,
+  "discharged_mwh": 2.7974,
+  "cycles": 1.4743,
+  "settled_utc": "2026-11-26T09:06:59+00:00"
+}
